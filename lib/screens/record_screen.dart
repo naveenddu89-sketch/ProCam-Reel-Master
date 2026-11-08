@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -770,7 +771,7 @@ class _RecordScreenState extends State<RecordScreen> {
           border: Border.all(color: Colors.white.withOpacity(0.35)),
           color: kSurface,
         ),
-        clipBehavior: Clip.antiAlias,
+        clipBehavior: ui.Clip.antiAlias,
         child: _lastClip?.thumbPath != null
             ? Image.file(File(_lastClip!.thumbPath!), fit: BoxFit.cover)
             : const Icon(Icons.photo_library_outlined,

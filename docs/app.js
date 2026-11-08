@@ -77,6 +77,9 @@ const el = {
   galleryEmpty: $('#galleryEmpty'),
   editor: $('#editor'),
   scriptArea: $('#scriptArea'),
+  scriptStats: $('#scriptStats'),
+  installBtn: $('#installBtn'),
+  installGate: $('#installGate'),
 };
 
 const video = document.createElement('video');
@@ -85,6 +88,14 @@ video.muted = true;
 video.autoplay = true;
 video.setAttribute('playsinline', '');
 
+// Long takes: if the browser pauses/stalls the camera element (screen dim,
+// tab switch), nudge it back so the canvas keeps painting.
+['stalled', 'pause'].forEach((ev) => {
+  video.addEventListener(ev, () => {
+    if (state.recording) video.play().catch(() => {});
+  });
+});
+
 let stream = null;
 let micStream = null;
 let audioCtx = null;
@@ -92,6 +103,9 @@ let audioDest = null;
 let audioTrack = null;
 let recorder = null;
 let chunks = [];
+let currentClipId = '';
+let chunkSink = null;
+let finalizing = false;
 let startedAt = 0;
 let timerId = 0;
 let rafId = 0;
@@ -152,7 +166,7 @@ function loadSettings() {
       uhd: !!s.uhd,
       grid: s.grid !== false,
       promptOn: s.promptOn !== false,
-      promptSpeed: Number(s.promptSpeed) || 26,
+      promptSpeed: Math.min(180, Math.max(6, Number(s.promptSpeed) || 26)),
       promptSize: Number(s.promptSize) || 24,
       promptOpacity: Number(s.promptOpacity) || 0.8,
       script: typeof s.script === 'string' ? s.script : state.script,
@@ -463,7 +477,7 @@ function startTimer() {
 }
 
 async function startRecording() {
-  if (!stream || state.recording) return;
+  if (!stream || state.recording || recorder) return;
   if (typeof MediaRecorder === 'undefined' || !el.canvas.captureStream) {
     toast('This browser cannot record video. Try Chrome, Edge or Safari.');
     return;
@@ -471,6 +485,12 @@ async function startRecording() {
 
   applyCanvasSize();
   try { await navigator.storage?.persist?.(); } catch { /* noop */ }
+  checkStorage();
+
+  currentClipId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  chunks = [];
+  chunkSink = { clipId: currentClipId, seq: 0, pending: Promise.resolve(), failed: false };
+  finalizing = false;
 
   const canvasStream = el.canvas.captureStream(state.fps);
   if (audioTrack) canvasStream.addTrack(audioTrack);
@@ -486,11 +506,20 @@ async function startRecording() {
     recorder = new MediaRecorder(canvasStream);
   }
 
-  chunks = [];
-  recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size) sinkChunk(e.data); };
   recorder.onstop = finalizeRecording;
-  recorder.onerror = () => toast('Recorder error — take discarded');
+  recorder.onerror = (e) => {
+    console.error('recorder error', e);
+    toast('Recorder warning — saving the take');
+    stopRecording();
+  };
   recorder.start(1000);
+
+  // If the canvas track dies (browser reclaims it) stop cleanly instead of
+  // leaving a frozen preview on screen.
+  canvasStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+    if (state.recording) stopRecording();
+  });
 
   state.recording = true;
   document.body.classList.add('recording');
@@ -502,6 +531,32 @@ async function startRecording() {
 
   try {
     wakeLock = await navigator.wakeLock?.request?.('screen');
+  } catch { /* noop */ }
+}
+
+/* Write each MediaRecorder chunk to IndexedDB immediately. Memory only holds
+ * chunks if disk writes fail, which keeps multi-minute takes stable. */
+function sinkChunk(blob) {
+  const s = chunkSink;
+  if (!s || s.failed) {
+    chunks.push(blob);
+    return;
+  }
+  s.pending = s.pending
+    .then(() => idbChunkPut(s.clipId, s.seq++, blob))
+    .catch((err) => {
+      console.warn('chunk disk write failed, keeping in memory', err);
+      s.failed = true;
+      chunks.push(blob);
+    });
+}
+
+async function checkStorage() {
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est?.quota && est.usage / est.quota > 0.9) {
+      toast('Storage almost full — download and delete old clips');
+    }
   } catch { /* noop */ }
 }
 
@@ -519,42 +574,64 @@ function stopRecording() {
 }
 
 async function finalizeRecording() {
-  const duration = startedAt ? (performance.now() - startedAt) / 1000 : 0;
-  const type = recorder?.mimeType || chunks[0]?.type || 'video/webm';
-  const blob = new Blob(chunks, { type });
-  chunks = [];
-  recorder = null;
-
-  if (!blob.size) {
-    toast('Recording was empty');
-    return;
-  }
-
-  const { w, h } = canvasSize();
-  const isMp4 = type.includes('mp4');
-  const clip = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    name: `REEL_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${isMp4 ? 'mp4' : 'webm'}`,
-    mime: type,
-    size: blob.size,
-    date: Date.now(),
-    duration,
-    width: w,
-    height: h,
-    fps: state.fps,
-    thumb: makeThumb(),
-    blob,
-  };
-
+  if (finalizing) return;
+  finalizing = true;
   try {
-    await idbPut(clip);
-  } catch (err) {
-    console.warn('indexeddb failed', err);
-    toast('Saved to downloads only — browser storage is full');
-  }
+    const duration = startedAt ? (performance.now() - startedAt) / 1000 : 0;
+    const rec = recorder;
+    const sink = chunkSink;
+    const clipId = currentClipId || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const type = rec?.mimeType || chunks[0]?.type || 'video/webm';
+    recorder = null;
+    chunkSink = null;
 
-  setLastThumb(clip.thumb);
-  showResult(clip);
+    if (sink) await sink.pending;
+    let parts = chunks;
+    if (sink) {
+      try {
+        const stored = await idbChunks(clipId);
+        parts = stored.concat(chunks);
+      } catch (err) {
+        console.warn('chunk read failed', err);
+      }
+    }
+    const blob = new Blob(parts, { type });
+    chunks = [];
+    if (sink) idbChunksClear(clipId).catch(() => {});
+
+    if (!blob.size) {
+      toast('Recording was empty');
+      return;
+    }
+
+    const { w, h } = canvasSize();
+    const isMp4 = type.includes('mp4');
+    const clip = {
+      id: clipId,
+      name: `REEL_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${isMp4 ? 'mp4' : 'webm'}`,
+      mime: type,
+      size: blob.size,
+      date: Date.now(),
+      duration,
+      width: w,
+      height: h,
+      fps: state.fps,
+      thumb: makeThumb(),
+      blob,
+    };
+
+    try {
+      await idbPut(clip);
+    } catch (err) {
+      console.warn('indexeddb failed', err);
+      toast('Saved to downloads only — browser storage is full');
+    }
+
+    setLastThumb(clip.thumb);
+    showResult(clip);
+  } finally {
+    finalizing = false;
+  }
 }
 
 function makeThumb() {
@@ -709,15 +786,21 @@ function openClipSheet(clip) {
 
 const DB_NAME = 'procam-web';
 const STORE = 'clips';
+const CHUNK_STORE = 'chunks';
+const DB_VER = 2;
 let dbPromise = null;
 
 function db() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, DB_VER);
     req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains(STORE)) {
-        req.result.createObjectStore(STORE, { keyPath: 'id' });
+      const d = req.result;
+      if (!d.objectStoreNames.contains(STORE)) {
+        d.createObjectStore(STORE, { keyPath: 'id' });
+      }
+      if (!d.objectStoreNames.contains(CHUNK_STORE)) {
+        d.createObjectStore(CHUNK_STORE, { keyPath: ['clipId', 'seq'] });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -760,6 +843,49 @@ async function idbDelete(id) {
   });
 }
 
+/* Chunks are written to disk as they arrive so a long take never has to sit
+ * fully in RAM. They are combined into one Blob when the take stops. */
+function chunkRange(clipId) {
+  return IDBKeyRange.bound([clipId, 0], [clipId, Number.MAX_SAFE_INTEGER]);
+}
+
+async function idbChunkPut(clipId, seq, blob) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(CHUNK_STORE, 'readwrite');
+    tx.objectStore(CHUNK_STORE).put({ clipId, seq, blob });
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbChunks(clipId) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(CHUNK_STORE, 'readonly');
+    const req = tx.objectStore(CHUNK_STORE).getAll(chunkRange(clipId));
+    req.onsuccess = () => {
+      const rows = (req.result || []).sort((a, b) => a.seq - b.seq);
+      resolve(rows.map((r) => r.blob));
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbChunksClear(clipId) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(CHUNK_STORE, 'readwrite');
+    const store = tx.objectStore(CHUNK_STORE);
+    const req = store.getAllKeys(clipId ? chunkRange(clipId) : undefined);
+    req.onsuccess = () => {
+      (req.result || []).forEach((key) => store.delete(key));
+    };
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 /* ---------------- sheets ---------------- */
 
 function openSheet(html) {
@@ -793,8 +919,9 @@ function promptPlay(play) {
 function promptTick(t) {
   requestAnimationFrame(promptTick);
   if (!state.promptPlaying) return;
+  if (document.hidden) { promptLastT = 0; return; }
   if (!promptLastT) { promptLastT = t; return; }
-  const dt = Math.min(0.1, (t - promptLastT) / 1000);
+  const dt = Math.min(0.25, (t - promptLastT) / 1000);
   promptLastT = t;
   promptOffset += state.promptSpeed * dt;
 
@@ -809,12 +936,26 @@ function promptTick(t) {
 function setPromptText(text) {
   state.script = text;
   el.promptText.textContent = text;
+  resetPrompt();
+}
+
+function resetPrompt() {
   promptOffset = 0;
+  promptLastT = 0;
   el.promptText.style.transform = 'translate3d(0,0,0)';
+}
+
+function updateScriptStats() {
+  const text = el.scriptArea.value;
+  const words = (text.trim().match(/\S+/g) || []).length;
+  const mins = words / 150;
+  const read = words ? (mins < 1 ? '<1 min' : `${Math.round(mins)} min`) : '0 min';
+  el.scriptStats.textContent = `${words} words · ~${read} read · long scripts supported`;
 }
 
 function openScriptEditor() {
   el.scriptArea.value = state.script;
+  updateScriptStats();
   el.editor.classList.remove('hidden');
   setTimeout(() => el.scriptArea.focus(), 50);
 }
@@ -852,6 +993,65 @@ function makePrompterDraggable() {
   const stop = () => { dragging = false; };
   head.addEventListener('pointerup', stop);
   head.addEventListener('pointercancel', stop);
+}
+
+/* ---------------- install as app ---------------- */
+
+let installEvent = null;
+
+function isStandalone() {
+  return window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+}
+
+function setupInstall() {
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installEvent = e;
+    if (!isStandalone()) {
+      el.installBtn.classList.remove('hidden');
+      el.installGate.classList.remove('hidden');
+    }
+  });
+  window.addEventListener('appinstalled', () => {
+    installEvent = null;
+    el.installBtn.classList.add('hidden');
+    el.installGate.classList.add('hidden');
+    toast('App installed — home screen se kholo');
+  });
+  // Show the entry point on phones even before Chrome fires the prompt, so the
+  // user can always reach the "Install app" instructions.
+  const mobile = /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+  if (mobile && !isStandalone()) {
+    el.installBtn.classList.remove('hidden');
+    el.installGate.classList.remove('hidden');
+  }
+}
+
+async function promptInstall() {
+  if (isStandalone()) {
+    toast('App already installed');
+    return;
+  }
+  if (installEvent) {
+    installEvent.prompt();
+    const choice = await installEvent.userChoice.catch(() => null);
+    installEvent = null;
+    if (choice?.outcome === 'accepted') {
+      el.installBtn.classList.add('hidden');
+      el.installGate.classList.add('hidden');
+      toast('Installing app…');
+    }
+    return;
+  }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  openSheet(`
+    <h2>Install as app</h2>
+    <p class="sub">${ios
+      ? 'Safari me Share button dabao → <b>Add to Home Screen</b> → <b>Add</b>.'
+      : 'Browser menu (⋮) → <b>Install app</b> or <b>Add to Home screen</b>.'}</p>
+    <div class="btn-row"><button class="btn primary" data-i="close">Got it</button></div>
+  `);
+  $('#sheetBody [data-i="close"]').addEventListener('click', closeSheet);
 }
 
 /* ---------------- ui wiring ---------------- */
@@ -945,8 +1145,13 @@ function bind() {
       openScriptEditor();
     } else if (act === 'prompt-play') {
       promptPlay(!state.promptPlaying);
+    } else if (act === 'prompt-reset') {
+      resetPrompt();
+      toast('Script restarted');
+    } else if (act === 'install') {
+      promptInstall();
     } else if (act === 'editor-save') {
-      setPromptText(el.scriptArea.value.slice(0, 20_000));
+      setPromptText(el.scriptArea.value.slice(0, 200_000));
       saveSettings();
       el.editor.classList.add('hidden');
       toast('Script saved');
@@ -976,17 +1181,27 @@ function bind() {
     applyPromptStyle();
     saveSettings();
   });
+  el.scriptArea.addEventListener('input', updateScriptStats);
 
   window.addEventListener('resize', layoutStage);
   window.addEventListener('orientationchange', () => setTimeout(layoutStage, 150));
 
-  if ('wakeLock' in navigator) {
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && state.recording) {
-        navigator.wakeLock.request('screen').then((w) => { wakeLock = w; }).catch(() => {});
+  let hiddenWhileRecording = false;
+  document.addEventListener('visibilitychange', () => {
+    promptLastT = 0;
+    if (document.hidden) {
+      if (state.recording) hiddenWhileRecording = true;
+      return;
+    }
+    if (state.recording) {
+      if (hiddenWhileRecording) {
+        hiddenWhileRecording = false;
+        toast('Take chalu hai — screen on rakho');
       }
-    });
-  }
+      navigator.wakeLock?.request?.('screen').then((w) => { wakeLock = w; }).catch(() => {});
+      video.play().catch(() => {});
+    }
+  });
 }
 
 function boot() {
@@ -998,6 +1213,7 @@ function boot() {
   updateButtons();
   makePrompterDraggable();
   bind();
+  setupInstall();
   requestAnimationFrame(promptTick);
 
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -1006,9 +1222,13 @@ function boot() {
     toast('Open this page over HTTPS to use the camera');
   }
 
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  const swOK = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if ('serviceWorker' in navigator && swOK) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
+
+  // Remove half-written chunks from a previous crash/tab close.
+  idbChunksClear().catch(() => {});
 
   idbAll().then((clips) => {
     if (clips.length) {
@@ -1018,7 +1238,12 @@ function boot() {
   });
 }
 
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', (e) => {
+  if (state.recording) {
+    e.preventDefault();
+    e.returnValue = '';
+    return;
+  }
   stream?.getTracks().forEach((t) => t.stop());
   stopMic();
   cancelAnimationFrame(rafId);

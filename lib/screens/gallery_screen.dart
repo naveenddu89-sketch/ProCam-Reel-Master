@@ -144,7 +144,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
             ),
             ListTile(
               dense: true,
-              leading: const Icon(Icons.instagram_rounded,
+              leading: const Icon(Icons.camera_alt_outlined,
                   color: Color(0xFFE1306C)),
               title: const Text('Share to Instagram',
                   style: TextStyle(fontSize: 13)),

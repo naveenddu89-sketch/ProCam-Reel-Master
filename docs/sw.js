@@ -3,7 +3,7 @@
  * Strategy: network-first. Online users always get the newest HTML/CSS/JS,
  * offline users get the last cached copy. This means the app can be updated
  * by just pushing files - no cache-version bump or rebuild needed. */
-const CACHE = 'procam-web-v2';
+const CACHE = 'procam-web-v3';
 const ASSETS = [
   './',
   './index.html',

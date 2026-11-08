@@ -1,11 +1,16 @@
 {
+  "id": "./",
   "name": "ProCam Reel Master",
   "short_name": "ProCam",
   "description": "Record Instagram Reels in the browser. Camera and mic stay on your device.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "portrait-primary",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["photo", "video", "productivity"],
   "background_color": "#08080a",
   "theme_color": "#08080a",
   "icons": [

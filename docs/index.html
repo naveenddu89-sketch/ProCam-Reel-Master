@@ -7,10 +7,11 @@
   <meta name="description" content="Browser recorder for Instagram Reels. Local only." />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ProCam" />
   <title>ProCam Reel Master — Web</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-180.png" />
   <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
@@ -26,6 +27,8 @@
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v11l4-4 1.4 1.4L12 17l-5.4-5.6L8 10l4 4V3h0zM5 19h14v2H5v-2z"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24"><path d="M14 4h6v6h-2V7.4l-8.3 8.3-1.4-1.4L16.6 6H14V4zM5 6h6v2H7v9h9v-4h2v6H5V6z"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 12H7L6 9z"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></symbol>
+    <symbol id="i-install" viewBox="0 0 24 24"><path d="M12 3v10m0 0 4-4m-4 4-4-4M5 17h14v3H5z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </svg>
 
   <div id="stageWrap">
@@ -38,13 +41,14 @@
         <div id="prompterHead">
           <span class="grip">⠿</span>
           <span class="p-title">TELEPROMPTER</span>
+          <button class="mini icon" data-act="prompt-reset" title="Restart script"><svg class="ic"><use href="#i-reset"/></svg></button>
           <button class="mini" data-act="prompt-edit" title="Edit script">Edit</button>
           <button class="mini icon" data-act="prompt-close" title="Hide"><svg class="ic"><use href="#i-close"/></svg></button>
         </div>
         <div id="promptViewport"><div id="promptText">Paste your script here.<br><br>Tap <b>Edit</b> to change it.</div></div>
         <div id="promptControls">
           <button class="mini icon" id="promptPlay" data-act="prompt-play" title="Play / pause"><svg class="ic"><use href="#i-play"/></svg></button>
-          <label>Speed<input id="promptSpeed" type="range" min="6" max="90" value="26" /></label>
+          <label>Speed<input id="promptSpeed" type="range" min="6" max="180" value="26" /></label>
           <label>Size<input id="promptSize" type="range" min="14" max="42" value="24" /></label>
           <label>Fade<input id="promptOpacity" type="range" min="20" max="100" value="80" /></label>
         </div>
@@ -59,6 +63,7 @@
           <h1>ProCam Reel Master</h1>
           <p>Reels recorder in your browser. Videos stay on your device.</p>
           <button id="startBtn" class="primary">Start camera</button>
+          <button id="installGate" class="link-btn hidden" data-act="install">Install as app</button>
           <p class="tiny">Camera + mic permission needed. Use HTTPS (or localhost).</p>
         </div>
       </div>
@@ -68,6 +73,9 @@
   <header id="topBar" class="hidden">
     <span class="brand">PROCAM</span>
     <span class="spacer"></span>
+    <button class="chip hidden" data-act="install" id="installBtn" title="Install app">
+      <svg class="ic"><use href="#i-install"/></svg>
+    </button>
     <button class="chip" data-act="torch" id="torchBtn" title="Torch">
       <svg class="ic"><use href="#i-flash"/></svg>
     </button>
@@ -134,7 +142,7 @@
       <button class="mini icon" data-act="editor-close"><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
     <textarea id="scriptArea" spellcheck="false" placeholder="Type or paste your script…"></textarea>
-    <p class="fs-meta">Auto-scroll starts with the recording.</p>
+    <p id="scriptStats" class="fs-meta">Long scripts supported · auto-scroll starts with the recording.</p>
   </div>
 
   <div id="toast" class="toast hidden"></div>

@@ -1,4 +1,4 @@
-import 'core/theme.dart';
+import '../core/theme.dart';
 
 enum ShareTarget { instagram, facebook, youtube, generic }
 
