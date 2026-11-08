@@ -1,0 +1,21 @@
+name: procam_reel_master
+description: Local-first pro camera + Instagram Reels optimizer for low-RAM Android phones.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Full FFmpeg filters (afftdn, loudnorm) + libx264. Smallest GPL variant (~20MB/abi).
+  ffmpeg_kit_flutter_new_min_gpl: ^2.6.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

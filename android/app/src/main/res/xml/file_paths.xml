@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- /Android/data/<pkg>/files/Movies/ProCam (recordings + exports) -->
+    <external-files-path
+        name="procam_movies"
+        path="Movies/" />
+    <!-- Cached 360px thumbnails -->
+    <cache-path
+        name="procam_thumbs"
+        path="procam_thumbs/" />
+</paths>
