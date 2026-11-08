@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#08080a" />
+  <meta name="description" content="Browser recorder for Instagram Reels. Local only." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>ProCam Reel Master — Web</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-flash" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></symbol>
+    <symbol id="i-flip" viewBox="0 0 24 24"><path d="M4 7h9V3l7 5-7 5V9H4V7zm16 10h-9v4l-7-5 7-5v4h9v2z"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm6-3a6 6 0 0 1-12 0H4a8 8 0 0 0 7 7.9V23h2v-3.1A8 8 0 0 0 20 12h-2z"/></symbol>
+    <symbol id="i-gallery" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4zm2 14h12l-4-5-3 3.5L9 14l-3 4z"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v4h4V5H5zm6 0v4h4V5h-4zm6 0v4h4V5h-4zM5 11v4h4v-4H5zm6 0v4h4v-4h-4zm6 0v4h4v-4h-4zM5 17v2h4v-2H5zm6 0v2h4v-2h-4zm6 0v2h4v-2h-4z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4v16l13-8L7 4z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v11l4-4 1.4 1.4L12 17l-5.4-5.6L8 10l4 4V3h0zM5 19h14v2H5v-2z"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M14 4h6v6h-2V7.4l-8.3 8.3-1.4-1.4L16.6 6H14V4zM5 6h6v2H7v9h9v-4h2v6H5V6z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 12H7L6 9z"/></symbol>
+  </svg>
+
+  <div id="stageWrap">
+    <div id="stage">
+      <canvas id="stageCanvas" width="1080" height="1920"></canvas>
+
+      <div id="grid" class="overlay"><i class="v1"></i><i class="v2"></i><i class="h1"></i><i class="h2"></i></div>
+
+      <div id="prompter" class="overlay">
+        <div id="prompterHead">
+          <span class="grip">⠿</span>
+          <span class="p-title">TELEPROMPTER</span>
+          <button class="mini" data-act="prompt-edit" title="Edit script">Edit</button>
+          <button class="mini icon" data-act="prompt-close" title="Hide"><svg class="ic"><use href="#i-close"/></svg></button>
+        </div>
+        <div id="promptViewport"><div id="promptText">Paste your script here.<br><br>Tap <b>Edit</b> to change it.</div></div>
+        <div id="promptControls">
+          <button class="mini icon" id="promptPlay" data-act="prompt-play" title="Play / pause"><svg class="ic"><use href="#i-play"/></svg></button>
+          <label>Speed<input id="promptSpeed" type="range" min="6" max="90" value="26" /></label>
+          <label>Size<input id="promptSize" type="range" min="14" max="42" value="24" /></label>
+          <label>Fade<input id="promptOpacity" type="range" min="20" max="100" value="80" /></label>
+        </div>
+      </div>
+
+      <div id="recBadge" class="hidden"><span class="dot"></span><span id="recTime">00:00</span></div>
+      <div id="qualityBadge" class="hidden">1080p</div>
+
+      <div id="permGate">
+        <div class="gate-card">
+          <div class="gate-logo"><span></span></div>
+          <h1>ProCam Reel Master</h1>
+          <p>Reels recorder in your browser. Videos stay on your device.</p>
+          <button id="startBtn" class="primary">Start camera</button>
+          <p class="tiny">Camera + mic permission needed. Use HTTPS (or localhost).</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <header id="topBar" class="hidden">
+    <span class="brand">PROCAM</span>
+    <span class="spacer"></span>
+    <button class="chip" data-act="torch" id="torchBtn" title="Torch">
+      <svg class="ic"><use href="#i-flash"/></svg>
+    </button>
+    <button class="chip" data-act="quality" id="qualityBtn" title="Resolution">HD</button>
+    <button class="chip" data-act="grid" id="gridBtn" title="Grid">
+      <svg class="ic"><use href="#i-grid"/></svg>
+    </button>
+    <button class="chip" data-act="flip" title="Switch camera">
+      <svg class="ic"><use href="#i-flip"/></svg>
+    </button>
+  </header>
+
+  <footer id="bottomBar" class="hidden">
+    <div class="row" id="aspectRow">
+      <button class="chip aspect active" data-aspect="9:16">9:16</button>
+      <button class="chip aspect" data-aspect="16:9">16:9</button>
+      <button class="chip aspect" data-aspect="1:1">1:1</button>
+      <button class="chip aspect" data-aspect="4:5">4:5</button>
+    </div>
+
+    <div class="row between" id="midRow">
+      <button class="pill" data-act="prompt-toggle">
+        <svg class="ic"><use href="#i-grid"/></svg><span>Teleprompter</span>
+      </button>
+      <div class="row tight">
+        <div id="fpsRow" class="seg">
+          <button class="seg-btn active" data-fps="30">30</button>
+          <button class="seg-btn" data-fps="60">60</button>
+        </div>
+        <button class="chip zoom" data-zoom="1">1×</button>
+        <button class="chip zoom" data-zoom="2">2×</button>
+        <button class="chip zoom" data-zoom="4">4×</button>
+      </div>
+    </div>
+
+    <div class="row around" id="mainRow">
+      <button id="galleryBtn" class="round" title="Gallery">
+        <svg class="ic"><use href="#i-gallery"/></svg>
+        <img id="lastThumb" alt="" class="hidden" />
+      </button>
+      <button id="recBtn" class="rec" title="Record"><span></span></button>
+      <button id="micBtn" class="round" title="Microphone"><svg class="ic"><use href="#i-mic"/></svg></button>
+    </div>
+  </footer>
+
+  <div id="sheet" class="sheet hidden"><div class="sheet-card" id="sheetBody"></div></div>
+
+  <div id="gallery" class="fullscreen hidden">
+    <header class="fs-head">
+      <span>REELS</span>
+      <span class="spacer"></span>
+      <button class="mini icon" data-act="gallery-close"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <p id="galleryMeta" class="fs-meta"></p>
+    <div id="galleryGrid" class="gallery-grid"></div>
+    <p id="galleryEmpty" class="fs-empty hidden">No recordings yet.<br />Record a take, then export it for Reels.</p>
+  </div>
+
+  <div id="editor" class="fullscreen hidden">
+    <header class="fs-head">
+      <span>SCRIPT</span>
+      <span class="spacer"></span>
+      <button class="mini" data-act="editor-save">Save</button>
+      <button class="mini icon" data-act="editor-close"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <textarea id="scriptArea" spellcheck="false" placeholder="Type or paste your script…"></textarea>
+    <p class="fs-meta">Auto-scroll starts with the recording.</p>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

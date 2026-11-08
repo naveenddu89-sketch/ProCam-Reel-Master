@@ -5,6 +5,62 @@ separate AAC mic track (Bluetooth/wired/built-in), FFT denoise on export.
 Videos are never uploaded. Firebase Analytics is used only for anonymous usage
 counters (event names + coarse numbers, no filenames, no media).
 
+There are **two ways to use it**:
+
+1. **Web app (works today, no install)** - open the link below on your phone.
+2. **Android APK** - full native pipeline (CameraX + FFmpeg export).
+
+## Web app
+
+Link (after GitHub Pages is enabled for this repo):
+
+```
+https://naveenddu89-sketch.github.io/ProCam-Reel-Master/
+```
+
+The web app lives in `docs/` and is plain HTML/CSS/JS - no build step, no server.
+Open it in Chrome/Edge/Safari on Android; allow camera + mic. It records with
+`MediaRecorder` from a canvas, so the output is exactly 1080x1920 for 9:16
+(1080x1080 for 1:1, etc.) at an 18 Mbps target.
+
+What is included:
+
+- live camera preview with 3x3 grid, front/back flip, torch (if the browser
+  exposes it), zoom 1x/2x/4x, 30/60 FPS and HD/4K request
+- draggable floating teleprompter with speed, size and opacity controls and a
+  full-screen script editor
+- local gallery in IndexedDB (thumbnail, size, duration, date), one-tap
+  share/download, delete
+- mic picker plus a WebAudio chain: high-pass 90 Hz, low-pass 12 kHz,
+  compressor, 192 kbps AAC
+- installable PWA: use Chrome → "Add to Home screen" once the page is loaded
+- all media stays on the phone; nothing is uploaded
+
+Browser limits (these do not apply to the APK):
+
+- Output container depends on the browser: Chrome/Edge on Android produce
+  **MP4 / H.264**; other browsers may produce WebM, which Instagram rejects.
+  Convert the file or use Chrome for upload-ready reels.
+- No FFmpeg, so no `afftdn`/`loudnorm` two-pass export. Audio is cleaned live.
+- 4K is a request, not a guarantee - the browser picks the closest camera mode.
+- Torch, Bluetooth SCO routing and some mic labels depend on the OS/browser.
+
+### Publish with GitHub Pages
+
+1. Push `docs/` to `main`.
+2. Repo → **Settings → Pages** → Source: *Deploy from a branch* →
+   Branch: `main`, folder: `/docs` → **Save**.
+3. Wait ~1 minute; the URL above becomes live. Camera needs HTTPS, which Pages
+   provides automatically.
+
+### Run the web app locally
+
+```powershell
+# any static server works; camera works on http://localhost
+npx serve docs
+# or: python -m http.server 4173 -d docs
+```
+
 ## Project layout
 
 ```
@@ -32,6 +88,14 @@ android/app/src/main/
     audio/AudioRouteManager.kt       Bluetooth SCO / wired / USB / built-in
     media/ClipRepository.kt          scan, lazy thumbs, share intents
   build.gradle.kts                   CameraX 1.5.3, minSdk 24
+
+docs/                                browser version (GitHub Pages)
+  index.html                         recorder UI + SVG icon sprite
+  app.css                            dark theme, stage, sheets
+  app.js                             camera, MediaRecorder, teleprompter, IndexedDB
+  manifest.webmanifest               installable PWA
+  sw.js                              offline shell cache
+  icons/                             PWA icons
 ```
 
 ## Build & run (Windows PowerShell)
