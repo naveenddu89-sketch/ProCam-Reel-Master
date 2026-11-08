@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme.dart';
 import '../models/clip.dart';
+import '../services/analytics.dart';
 import '../services/procam_engine.dart';
 import '../services/video_exporter.dart';
 import '../widgets/grid_overlay.dart';
@@ -154,9 +155,16 @@ class _RecordScreenState extends State<RecordScreen> {
     setState(() => _busy = true);
     try {
       if (_recording) {
+        final took = _recStart == null
+            ? 0
+            : DateTime.now().difference(_recStart!).inSeconds;
         final result = await _engine.stopRecording();
         _stopTimer();
         _prompter.pause();
+        Analytics.instance.log('record_stop', {
+          'duration_s': took,
+          'finalized': result == null ? 0 : 1,
+        });
         if (!mounted) return;
         setState(() {
           _recording = false;
@@ -177,6 +185,14 @@ class _RecordScreenState extends State<RecordScreen> {
         }
         _startTimer();
         _prompter.play(); // auto-scroll starts with the take
+        Analytics.instance.log('record_start', {
+          'aspect': _aspect,
+          'quality': _is4k ? '4k' : '1080p',
+          'torch': _torch ? 1 : 0,
+          'zoom': _zoom,
+          'mic': _micId == null ? 'none' : 'selected',
+          'teleprompter': _prompterOn ? 1 : 0,
+        });
         setState(() {
           _recording = true;
           _busy = false;
@@ -205,7 +221,10 @@ class _RecordScreenState extends State<RecordScreen> {
     if (_recording || a == _aspect) return;
     final ok = await _engine.setAspect(a);
     if (!mounted) return;
-    if (ok) setState(() => _aspect = a);
+    if (ok) {
+      setState(() => _aspect = a);
+      Analytics.instance.log('aspect_change', {'aspect': a});
+    }
   }
 
   Future<void> _toggle4k() async {
@@ -221,6 +240,10 @@ class _RecordScreenState extends State<RecordScreen> {
     final real = await _engine.is4k();
     if (!mounted) return;
     setState(() => _is4k = real);
+    Analytics.instance.log('quality_change', {
+      'quality': real ? '4k' : '1080p',
+      'requested_4k': next ? 1 : 0,
+    });
     if (next && !real) _snack('4K unavailable on this camera — using 1080p');
   }
 
@@ -276,6 +299,13 @@ class _RecordScreenState extends State<RecordScreen> {
                     : null,
                 onTap: () async {
                   await _engine.selectAudioInput(m.id);
+                  Analytics.instance.log('mic_select', {
+                    'type': m.bluetooth
+                        ? 'bluetooth'
+                        : m.wired
+                            ? 'wired'
+                            : 'builtin',
+                  });
                   if (ctx.mounted) Navigator.pop(ctx);
                   if (mounted) setState(() => _micId = m.id);
                 },
@@ -462,7 +492,8 @@ class _RecordScreenState extends State<RecordScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Everything stays on your device. No uploads, no servers.',
+                'Your footage stays on this device. Only anonymous usage\n'
+                'stats are sent to Firebase.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: kTextDim, fontSize: 12),
               ),
@@ -834,6 +865,11 @@ class _ExportSheetState extends State<_ExportSheet> {
       final audioOk = widget.result.audioPath != null &&
           File(widget.result.audioPath!).existsSync() &&
           File(widget.result.audioPath!).lengthSync() > 1024;
+      final started = DateTime.now();
+      Analytics.instance.log('export_start', {
+        'fps': _fps,
+        'has_audio': audioOk ? 1 : 0,
+      });
       await VideoExporter.export(
         videoPath: widget.result.videoPath,
         audioPath: audioOk ? widget.result.audioPath : null,
@@ -846,6 +882,12 @@ class _ExportSheetState extends State<_ExportSheet> {
         },
       );
       final thumb = await ClipRepository.thumbnail(out);
+      Analytics.instance.log('export_done', {
+        'fps': _fps,
+        'seconds': DateTime.now().difference(started).inSeconds,
+        'mb': (File(out).lengthSync() / (1024 * 1024) * 10).round() / 10,
+        'has_audio': audioOk ? 1 : 0,
+      });
       if (!mounted) return;
       setState(() {
         _exporting = false;
@@ -854,6 +896,7 @@ class _ExportSheetState extends State<_ExportSheet> {
         _thumb = thumb;
       });
     } catch (e) {
+      Analytics.instance.log('export_failed', {'fps': _fps, 'error': '$e'});
       // Never leave a half-written MP4 that the gallery would try to open.
       try {
         final partial = File(out);
@@ -871,6 +914,11 @@ class _ExportSheetState extends State<_ExportSheet> {
     final path = _output;
     if (path == null) return;
     final ok = await ClipRepository.share(path, t);
+    Analytics.instance.log('share', {
+      'target': t.name,
+      'source': 'export',
+      'ok': ok ? 1 : 0,
+    });
     if (!mounted) return;
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -997,7 +1045,7 @@ class _ExportSheetState extends State<_ExportSheet> {
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 0),
                 child: Text(
                   'Export is CPU-bound. On 3GB phones prefer 30 FPS; a 60s clip '
-                  'takes roughly 40–80s. Nothing leaves your device.',
+                  'takes roughly 40–80s. Your video never leaves the device.',
                   style: TextStyle(color: kTextDim, fontSize: 10, height: 1.4),
                 ),
               ),

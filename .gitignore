@@ -45,3 +45,5 @@ app.*.symbols
 
 # Obfuscation related
 app.*.map.json
+# Playwright CLI output (may contain credentials)
+.playwright-cli/

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme.dart';
 import '../models/clip.dart';
+import '../services/analytics.dart';
 import '../services/procam_engine.dart';
 
 /// Post-recording review: thumbnails, size/date, 1-tap share, delete.
@@ -199,6 +200,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
   Future<void> _share(BuildContext sheetCtx, Clip clip, ShareTarget t) async {
     Navigator.pop(sheetCtx);
     final ok = await ClipRepository.share(clip.path, t);
+    Analytics.instance.log('share', {
+      'target': t.name,
+      'source': 'gallery',
+      'ok': ok ? 1 : 0,
+    });
     if (!mounted) return;
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
