@@ -10,6 +10,20 @@ There are **two ways to use it**:
 1. **Web app (works today, no install)** - open the link below on your phone.
 2. **Android APK** - full native pipeline (CameraX + FFmpeg export).
 
+## Download the APK
+
+Direct install (no login, no build tools):
+
+```
+https://github.com/naveenddu89-sketch/ProCam-Reel-Master/releases/latest
+```
+
+- Most phones: `app-arm64-v8a-release.apk`
+- Older 32-bit phones: `app-armeabi-v7a-release.apk`
+
+Tap the APK on the phone, allow "Install unknown apps" for the browser, then
+open ProCam and grant camera + mic permission.
+
 ## Web app
 
 Link (after GitHub Pages is enabled for this repo):
