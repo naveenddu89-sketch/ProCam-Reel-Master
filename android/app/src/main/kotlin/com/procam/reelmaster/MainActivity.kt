@@ -3,6 +3,7 @@ package com.procam.reelmaster
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -33,7 +34,12 @@ class MainActivity : FlutterActivity() {
         audioRoute = AudioRouteManager(this)
         clips = ClipRepository(this)
         engine = CameraEngine(this, this, audioRoute) { payload ->
-            runOnUiThread { eventSink?.success(payload) }
+            runOnUiThread {
+                // Long takes: never let the screen sleep mid-recording, and
+                // clear the flag when CameraX finalizes on its own.
+                if (payload["type"] == "recording_finalized") setKeepScreenOn(false)
+                eventSink?.success(payload)
+            }
         }
 
         EventChannel(
@@ -88,10 +94,20 @@ class MainActivity : FlutterActivity() {
 
             "is4k" -> result.success(engine.is4k())
             "switchCamera" -> result.success(engine.switchCamera())
-            "startRecording" -> result.success(engine.startRecording())
+            "startRecording" -> {
+                val ok = engine.startRecording()
+                setKeepScreenOn(ok)
+                result.success(ok)
+            }
 
-            "stopRecording" -> engine.stopRecording { payload ->
-                runOnUiThread { result.success(payload) }
+            "stopRecording" -> {
+                setKeepScreenOn(false)
+                engine.stopRecording { payload ->
+                    runOnUiThread {
+                        setKeepScreenOn(false)
+                        result.success(payload)
+                    }
+                }
             }
 
             "setZoom" -> {
@@ -176,6 +192,17 @@ class MainActivity : FlutterActivity() {
 
     // ------------------------------------------------------------- permissions
 
+    /** Long recordings must not be interrupted by the screen timing out. */
+    private fun setKeepScreenOn(on: Boolean) {
+        runOnUiThread {
+            if (on) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
     private fun requiredPermissions(): Array<String> = arrayOf(
         Manifest.permission.CAMERA,
         Manifest.permission.RECORD_AUDIO,
@@ -226,6 +253,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        setKeepScreenOn(false)
         try {
             engine.shutdown()
         } catch (_: Throwable) {

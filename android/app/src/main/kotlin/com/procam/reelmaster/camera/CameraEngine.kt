@@ -2,6 +2,7 @@ package com.procam.reelmaster.camera
 
 import android.content.Context
 import android.os.Environment
+import android.os.StatFs
 import android.view.Surface
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
@@ -302,6 +303,17 @@ class CameraEngine(
             return false
         }
 
+        // A long take needs room; CameraX deletes failed output on storage
+        // errors, so refuse to start instead of losing the recording.
+        try {
+            val free = StatFs(dir.absolutePath).availableBytes
+            if (free < 300L * 1024 * 1024) {
+                error("Storage almost full — free at least 300 MB")
+                return false
+            }
+        } catch (_: Throwable) {
+        }
+
         val stamp = System.currentTimeMillis()
         val videoFile = File(dir, "PROCAM_$stamp.mp4")
         val audioFile = File(dir, "PROCAM_${stamp}_audio.m4a")
@@ -384,12 +396,17 @@ class CameraEngine(
                         "Recording error ${event.error}: " +
                             (event.cause?.message ?: "unknown"),
                     )
-                    videoFile.delete()
-                    audioFile.delete()
-                    val cb = pendingStop
-                    pendingStop = null
-                    cb?.invoke(null)
-                    return
+                    // Keep a playable partial take (storage full, app killed)
+                    // instead of throwing away minutes of footage.
+                    val keep = videoFile.exists() && videoFile.length() > 100_000
+                    if (!keep) {
+                        videoFile.delete()
+                        audioFile.delete()
+                        val cb = pendingStop
+                        pendingStop = null
+                        cb?.invoke(null)
+                        return
+                    }
                 }
 
                 val payload = mapOf<String, Any?>(

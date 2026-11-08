@@ -31,7 +31,8 @@ class TeleprompterController extends ChangeNotifier {
   }
 
   void setSpeed(double v) {
-    speed = v.clamp(6.0, 90.0).toDouble();
+    // 180 px/s covers fast talkers and long scripts without re-editing.
+    speed = v.clamp(6.0, 180.0).toDouble();
     notifyListeners();
   }
 
@@ -112,8 +113,18 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
     var next = _scroll.offset + widget.controller.speed * dt;
-    if (next >= pos.maxScrollExtent) next = 0; // restart from the top
+    if (next >= pos.maxScrollExtent) {
+      // End of a long script: hold the last line instead of snapping back.
+      _scroll.jumpTo(pos.maxScrollExtent);
+      widget.controller.pause();
+      return;
+    }
     _scroll.jumpTo(next);
+  }
+
+  void _restart() {
+    _last = Duration.zero;
+    if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
   @override
@@ -204,6 +215,8 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
           const Icon(Icons.drag_indicator_rounded,
               size: 16, color: Colors.white38),
           const Spacer(),
+          _icon(Icons.restart_alt_rounded, Colors.white70, _restart,
+              tooltip: 'Restart script'),
           _icon(Icons.edit_note_rounded, Colors.white70, _editText),
           _icon(Icons.tune_rounded, Colors.white70,
               () => setState(() => _showSettings = !_showSettings)),
@@ -215,40 +228,16 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
 
   Future<void> _editText() async {
     final c = widget.controller;
-    var draft = c.text;
-    final next = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF141417),
-        title: const Text('Teleprompter script',
-            style: TextStyle(fontSize: 15)),
-        // TextFormField carries its own controller, so nothing leaks when the
-        // dialog closes mid-animation.
-        content: TextFormField(
-          initialValue: c.text,
-          maxLines: 8,
-          minLines: 4,
-          autofocus: true,
-          onChanged: (v) => draft = v,
-          style: const TextStyle(fontSize: 13, height: 1.4),
-          decoration: const InputDecoration(
-            hintText: 'Paste your script here…',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, draft),
-            child: const Text('Save'),
-          ),
-        ],
+    final next = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _ScriptEditorPage(initial: c.text),
       ),
     );
-    if (next != null) c.setText(next);
+    if (next != null) {
+      c.setText(next);
+      _restart();
+    }
   }
 
   Widget _settings(TeleprompterController c) {
@@ -260,7 +249,7 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
           _sliderRow('Size', c.fontSize, 16, 54, c.setFontSize),
           _sliderRow('Opacity', c.opacity * 100, 20, 95,
               (v) => c.setOpacity(v / 100)),
-          _sliderRow('Speed', c.speed, 6, 90, c.setSpeed),
+          _sliderRow('Speed', c.speed, 6, 180, c.setSpeed),
         ],
       ),
     );
@@ -302,6 +291,118 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
       tooltip: tooltip,
       visualDensity: VisualDensity.compact,
       icon: Icon(icon, size: 18, color: color),
+    );
+  }
+}
+
+/// Full-screen editor so multi-page scripts stay comfortable to paste/edit.
+class _ScriptEditorPage extends StatefulWidget {
+  final String initial;
+
+  const _ScriptEditorPage({required this.initial});
+
+  @override
+  State<_ScriptEditorPage> createState() => _ScriptEditorPageState();
+}
+
+class _ScriptEditorPageState extends State<_ScriptEditorPage> {
+  late final TextEditingController _ctrl =
+      TextEditingController(text: widget.initial);
+  String _stats = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _stats = _statsFor(_ctrl.text);
+    _ctrl.addListener(_onTextChanged);
+  }
+
+  void _onTextChanged() {
+    final next = _statsFor(_ctrl.text);
+    if (next != _stats && mounted) setState(() => _stats = next);
+  }
+
+  String _statsFor(String raw) {
+    final text = raw.trim();
+    final words = text.isEmpty ? 0 : text.split(RegExp(r'\s+')).length;
+    final mins = words / 150;
+    final read = words == 0
+        ? '0 min'
+        : mins < 1
+            ? '<1 min'
+            : '${mins.round()} min';
+    return '$words words · ~$read read · long scripts supported';
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBg,
+      appBar: AppBar(
+        backgroundColor: kBg,
+        elevation: 0,
+        title: const Text('Script', style: TextStyle(fontSize: 15)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel', style: TextStyle(color: kTextDim)),
+          ),
+          TextButton(
+            onPressed: () {
+              // Same cap as the web app: 200k characters is many hours of read.
+              final text = _ctrl.text.length > 200000
+                  ? _ctrl.text.substring(0, 200000)
+                  : _ctrl.text;
+              Navigator.pop(context, text);
+            },
+            child: const Text(
+              'Save',
+              style: TextStyle(color: kLime, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: TextField(
+                  controller: _ctrl,
+                  autofocus: true,
+                  expands: true,
+                  maxLines: null,
+                  minLines: null,
+                  textAlignVertical: TextAlignVertical.top,
+                  keyboardType: TextInputType.multiline,
+                  style: const TextStyle(fontSize: 14, height: 1.45),
+                  decoration: const InputDecoration(
+                    hintText: 'Paste your script here…',
+                    border: InputBorder.none,
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _stats,
+                  style: const TextStyle(color: kTextDim, fontSize: 11),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

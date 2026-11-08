@@ -122,7 +122,9 @@ class VideoExporter {
     );
 
     final ok = await done.future.timeout(
-      const Duration(minutes: 15),
+      // Long takes re-encode slower than real time on phones; 15 min was too
+      // tight once clips pass a few minutes.
+      const Duration(minutes: 60),
       onTimeout: () {
         FFmpegKit.cancel();
         return false;

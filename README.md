@@ -27,8 +27,11 @@ What is included:
 
 - live camera preview with 3x3 grid, front/back flip, torch (if the browser
   exposes it), zoom 1x/2x/4x, 30/60 FPS and HD/4K request
-- draggable floating teleprompter with speed, size and opacity controls and a
-  full-screen script editor
+- draggable floating teleprompter with speed (up to 180), size and opacity
+  controls, a restart button and a full-screen editor for long scripts
+  (200k characters)
+- long takes are streamed to IndexedDB in 1 s chunks, so multi-minute
+  recordings never have to sit in RAM; a take is combined on stop
 - local gallery in IndexedDB (thumbnail, size, duration, date), one-tap
   share/download, delete
 - mic picker plus a WebAudio chain: high-pass 90 Hz, low-pass 12 kHz,
@@ -172,8 +175,12 @@ needed.
   192 kbps in `MicRecorder.kt`, ~4 KB buffer, no per-frame allocations.
 - Aspect switching rebinds use cases **only while idle**; it is rejected
   during a take so the encoder never restarts mid-recording.
+- Long takes: the screen is kept awake with `FLAG_KEEP_SCREEN_ON` while
+  recording, free storage is checked before a take starts, and a playable
+  partial file is kept if CameraX finalizes with an error (e.g. storage full).
 - The teleprompter scrolls with a vsync `Ticker` and `jumpTo` - zero rebuilds
-  per frame.
+  per frame - and supports long scripts (200k characters) plus speed up to
+  180 px/s.
 
 ## Export pipeline (Reels spec)
 
@@ -188,6 +195,7 @@ needed.
   `loudnorm=I=-14:TP=-1.5:LRA=11` -> AAC 192 kbps mono
 - `-movflags +faststart` so Instagram can read the moov atom instantly
 - `-threads 4` caps x264 memory on low-RAM phones
+- a 60 minute export timeout so long takes finish instead of being cancelled
 
 `audioOffsetMs` from CameraX keeps lip-sync (audio is trimmed or delayed by the
 measured start delta).
