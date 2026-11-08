@@ -15,10 +15,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
         applicationId = "com.procam.reelmaster"
         // FFmpegKit ships API 24+ binaries. CameraX needs 21+, so 24 wins.
@@ -39,6 +35,13 @@ android {
 
 flutter {
     source = "../.."
+}
+
+// AGP 9 / Kotlin 2.x: kotlinOptions is a hard error, use compilerOptions.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 dependencies {
