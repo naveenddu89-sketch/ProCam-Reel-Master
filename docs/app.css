@@ -231,6 +231,9 @@ body.recording .rec span { width: 28px; height: 28px; border-radius: 7px; }
   position: absolute;
   left: 6%; top: 16%;
   width: 88%;
+  max-height: 86%;
+  display: flex;
+  flex-direction: column;
   z-index: 9;
   pointer-events: auto;
   background: rgba(0, 0, 0, 0.42);
@@ -263,9 +266,10 @@ body.recording .rec span { width: 28px; height: 28px; border-radius: 7px; }
 .mini .ic { width: 14px; height: 14px; }
 
 #promptViewport {
+  flex: 1 1 auto;
   height: 30vh;
   max-height: 320px;
-  min-height: 120px;
+  min-height: 0;
   overflow: hidden;
   padding: 12px 14px;
   mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
@@ -458,4 +462,30 @@ body.recording .rec span { width: 28px; height: 28px; border-radius: 7px; }
   font-size: 11.5px;
   text-align: center;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------- small phones (320-360 px) ---------- */
+@media (max-width: 360px) {
+  #midRow .pill span { display: none; }
+  #midRow .pill { padding: 8px 10px; }
+  .chip { padding: 0 8px; }
+  .zoom { width: 32px; }
+  .p-title { display: none; }
+  #promptControls { grid-template-columns: auto 1fr; gap: 6px 8px; padding: 6px 8px 8px; }
+  #promptControls label { font-size: 8px; }
+  .gallery-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------- short screens / landscape ---------- */
+@media (max-height: 520px) {
+  #bottomBar { padding: 10px 12px calc(8px + env(safe-area-inset-bottom)); gap: 7px; }
+  #bottomBar .row { gap: 6px; }
+  #mainRow .round { width: 40px; height: 40px; }
+  #recBtn { width: 56px; height: 56px; border-width: 3px; }
+  #recBtn span { width: 42px; height: 42px; border-radius: 22px; }
+  body.recording #recBtn span { width: 20px; height: 20px; border-radius: 5px; }
+  #promptViewport { height: 20vh; }
+  #promptControls label { display: none; }
+  #promptControls { padding: 5px 8px 7px; }
+  .p-title { display: none; }
 }

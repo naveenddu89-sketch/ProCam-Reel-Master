@@ -9,16 +9,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Exact pins keep cloud builds reproducible - no surprise upgrades.
   # Full FFmpeg filters (afftdn, loudnorm) + libx264. Smallest GPL variant (~20MB/abi).
-  ffmpeg_kit_flutter_new_min_gpl: ^2.6.8
+  ffmpeg_kit_flutter_new_min_gpl: 2.6.8
   # Anonymous usage stats only. Media never leaves the device.
-  firebase_core: ^5.1.0
-  firebase_analytics: ^13.0.1
+  firebase_core: 5.1.0
+  firebase_analytics: 13.0.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_lints: 4.0.0
 
 flutter:
   uses-material-design: true

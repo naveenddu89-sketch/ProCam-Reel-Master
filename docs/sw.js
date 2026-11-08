@@ -1,5 +1,9 @@
-/* Offline shell cache. Media never leaves the device. */
-const CACHE = 'procam-web-v1';
+/* Offline shell cache. Media never leaves the device.
+ *
+ * Strategy: network-first. Online users always get the newest HTML/CSS/JS,
+ * offline users get the last cached copy. This means the app can be updated
+ * by just pushing files - no cache-version bump or rebuild needed. */
+const CACHE = 'procam-web-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -25,15 +29,26 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
   event.respondWith(
-    caches.match(event.request).then((hit) => {
-      if (hit) return hit;
-      return fetch(event.request).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((cache) => cache.put(event.request, copy)).catch(() => {});
+    fetch(req)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+        }
         return res;
-      });
-    }),
+      })
+      .catch(async () => {
+        const hit = await caches.match(req);
+        if (hit) return hit;
+        if (req.mode === 'navigate') return caches.match('./index.html');
+        return new Response('', { status: 504, statusText: 'Offline' });
+      }),
   );
 });

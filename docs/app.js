@@ -175,10 +175,18 @@ function applyCanvasSize() {
 
 function layoutStage() {
   const box = el.stageWrap.getBoundingClientRect();
+  // Keep the preview inside the safe area between the two fixed bars so the
+  // teleprompter never hides behind the record controls on short screens.
+  const topH = el.topBar.offsetHeight;
+  const botH = el.bottomBar.offsetHeight;
+  const availH = Math.max(160, box.height - topH - botH);
   const { w, h } = canvasSize();
-  const scale = Math.min(box.width / w, box.height / h);
+  const scale = Math.min(box.width / w, availH / h);
   el.stage.style.width = `${Math.floor(w * scale)}px`;
   el.stage.style.height = `${Math.floor(h * scale)}px`;
+  el.stageWrap.style.paddingTop = `${topH}px`;
+  el.stageWrap.style.paddingBottom = `${botH}px`;
+  applyPromptStyle();
 }
 
 function drawFrame() {
@@ -767,7 +775,11 @@ function closeSheet() {
 /* ---------------- teleprompter ---------------- */
 
 function applyPromptStyle() {
-  el.promptText.style.setProperty('--p-size', `${state.promptSize}px`);
+  // Scale the script font with the preview width so a 320 px phone does not
+  // get 24 px text in a 148 px wide teleprompter.
+  const stageW = el.stage.clientWidth || 390;
+  const factor = Math.min(1, Math.max(0.72, stageW / 390));
+  el.promptText.style.setProperty('--p-size', `${Math.round(state.promptSize * factor)}px`);
   el.promptText.style.setProperty('--p-opacity', String(state.promptOpacity));
 }
 

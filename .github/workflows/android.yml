@@ -16,8 +16,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Pinned on purpose: a Flutter/AGP jump can change the generated Gradle
+      # scaffold and break the build. Bump this only when you want to upgrade.
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
 

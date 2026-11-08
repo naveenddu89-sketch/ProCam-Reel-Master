@@ -61,6 +61,16 @@ npx serve docs
 # or: python -m http.server 4173 -d docs
 ```
 
+### Maintenance (near zero)
+
+- Static files only: no npm, no build step, no server, no database, no API keys.
+- GitHub Pages redeploys automatically on every push to `main`.
+- The service worker is network-first, so new files reach users without a cache
+  version bump.
+- The APK workflow pins Flutter `3.47.9` and every Dart package; `android/gradle.properties`
+  keeps the AGP 9 legacy DSL. Bump these only when you deliberately upgrade.
+- Recurring work: none. Optional: glance at the Actions tab occasionally.
+
 ## Project layout
 
 ```
