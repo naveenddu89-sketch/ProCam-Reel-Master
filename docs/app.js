@@ -191,8 +191,9 @@ function layoutStage() {
   const box = el.stageWrap.getBoundingClientRect();
   // Keep the preview inside the safe area between the two fixed bars so the
   // teleprompter never hides behind the record controls on short screens.
-  const topH = el.topBar.offsetHeight;
-  const botH = el.bottomBar.offsetHeight;
+  const desktop = isDesktopLayout();
+  const topH = el.topBar.offsetHeight + (desktop ? 8 : 0);
+  const botH = desktop ? 16 : el.bottomBar.offsetHeight;
   const availH = Math.max(160, box.height - topH - botH);
   const { w, h } = canvasSize();
   const scale = Math.min(box.width / w, availH / h);
@@ -201,6 +202,10 @@ function layoutStage() {
   el.stageWrap.style.paddingTop = `${topH}px`;
   el.stageWrap.style.paddingBottom = `${botH}px`;
   applyPromptStyle();
+}
+
+function isDesktopLayout() {
+  return window.matchMedia('(min-width: 900px) and (min-height: 620px)').matches;
 }
 
 function drawFrame() {
@@ -655,20 +660,25 @@ function lockUi(locked) {
 
 /* ---------------- result + gallery ---------------- */
 
+function isMobileDevice() {
+  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+}
+
 function showResult(clip) {
+  const mobile = isMobileDevice();
   if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
   lastObjectUrl = URL.createObjectURL(clip.blob);
   openSheet(`
     <h2>Reel ready</h2>
     <p class="sub">${clip.width}×${clip.height} · ${clip.fps} FPS · ${fmtSize(clip.size)} · ${clip.mime.includes('mp4') ? 'MP4 / H.264' : 'WebM'}</p>
-    <video class="result-video" controls playsinline autoplay muted loop src="${lastObjectUrl}"></video>
+    <video class="result-video" controls playsinline preload="metadata"${clip.thumb ? ` poster="${clip.thumb}"` : ''} src="${lastObjectUrl}"></video>
     <div class="stat-row">
       <div class="stat">Duration<b>${fmtDur(clip.duration)}</b></div>
       <div class="stat">Size<b>${fmtSize(clip.size)}</b></div>
       <div class="stat">Saved<b>On device</b></div>
     </div>
     <div class="btn-row">
-      <button class="btn primary" data-r="share"><svg class="ic"><use href="#i-share"/></svg>Share</button>
+      <button class="btn primary" data-r="share"><svg class="ic"><use href="${mobile ? '#i-share' : '#i-download'}"/></svg>${mobile ? 'Share' : 'Save video'}</button>
       <button class="btn" data-r="download"><svg class="ic"><use href="#i-download"/></svg>Download</button>
     </div>
     <div class="btn-row">
@@ -698,16 +708,30 @@ function downloadClip(clip) {
 }
 
 async function shareClip(clip) {
-  const file = new File([clip.blob], clip.name, { type: clip.mime });
-  if (navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: 'ProCam Reel' });
-      return;
-    } catch (err) {
-      if (err?.name === 'AbortError') return;
-    }
+  // Desktop browsers either have no Web Share API or show a flaky OS sheet.
+  // Saving the file is the reliable action there.
+  if (!isMobileDevice() || !navigator.share) {
+    downloadClip(clip);
+    toast('Video saved to Downloads');
+    return;
   }
-  toast('Share sheet not available — downloading instead');
+  try {
+    const type = (clip.mime || 'video/mp4').split(';')[0];
+    const file = new File([clip.blob], clip.name, { type });
+    if (navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: 'ProCam Reel' });
+        return;
+      } catch (err) {
+        // User closed the sheet: respect that instead of downloading.
+        if (err?.name === 'AbortError') return;
+        console.warn('share failed, falling back to download', err);
+      }
+    }
+  } catch (err) {
+    console.warn('share unavailable, falling back to download', err);
+  }
+  toast('Share sheet not available here — saving the video instead');
   downloadClip(clip);
 }
 
@@ -753,12 +777,13 @@ async function renderGallery() {
 
 function openClipSheet(clip) {
   const url = URL.createObjectURL(clip.blob);
+  const mobile = isMobileDevice();
   openSheet(`
     <h2>${clip.name}</h2>
     <p class="sub">${clip.width}×${clip.height} · ${clip.fps} FPS · ${fmtSize(clip.size)} · ${fmtDur(clip.duration)}</p>
-    <video class="result-video" controls playsinline autoplay muted loop src="${url}"></video>
+    <video class="result-video" controls playsinline preload="metadata"${clip.thumb ? ` poster="${clip.thumb}"` : ''} src="${url}"></video>
     <div class="btn-row">
-      <button class="btn primary" data-c="share">Share</button>
+      <button class="btn primary" data-c="share"><svg class="ic"><use href="${mobile ? '#i-share' : '#i-download'}"/></svg>${mobile ? 'Share' : 'Save video'}</button>
       <button class="btn" data-c="download">Download</button>
     </div>
     <div class="btn-row">

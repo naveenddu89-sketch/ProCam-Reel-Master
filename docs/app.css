@@ -497,3 +497,49 @@ body.recording .rec span { width: 28px; height: 28px; border-radius: 7px; }
   #promptControls { padding: 5px 8px 7px; }
   .p-title { display: none; }
 }
+
+/* ---------- laptop / desktop ---------- */
+@media (min-width: 900px) and (min-height: 620px) {
+  body { background: radial-gradient(circle at 28% 18%, #16161c 0%, #08080a 62%); }
+  #stageWrap { right: 348px; background: transparent; }
+  #stage { border-radius: 18px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65); }
+  #topBar { right: 348px; padding: 14px 20px; }
+  .brand { font-size: 12px; }
+
+  #bottomBar {
+    left: auto; right: 20px; top: 50%; bottom: auto;
+    transform: translateY(-50%);
+    width: 308px;
+    padding: 18px 16px;
+    gap: 14px;
+    border-radius: 20px;
+    border: 1px solid var(--line);
+    background: rgba(20, 20, 23, 0.96);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(10px);
+  }
+  #aspectRow { flex-wrap: wrap; }
+  .aspect { flex: 1 1 44%; min-width: 0; padding: 8px 0; }
+  #midRow { flex-direction: column; align-items: stretch; gap: 10px; }
+  #midRow .row.tight { justify-content: center; }
+  #mainRow { margin-top: 2px; }
+  .round { width: 50px; height: 50px; }
+  #recBtn { width: 84px; height: 84px; }
+  #recBtn span { width: 62px; height: 62px; border-radius: 32px; }
+  body.recording #recBtn span { width: 30px; height: 30px; border-radius: 8px; }
+  #promptViewport { height: 34vh; max-height: 380px; }
+
+  .sheet { align-items: center; justify-content: center; padding: 24px; }
+  .sheet-card {
+    max-width: 560px;
+    border-radius: 20px;
+    padding-bottom: 22px;
+  }
+  .result-video { max-height: 58vh; }
+  .gallery-grid { grid-template-columns: repeat(4, 1fr); padding: 8px 28px 32px; }
+  #editor { align-items: center; }
+  #editor .fs-head, #editor textarea, #editor .fs-meta { width: min(920px, 100%); }
+  #editor textarea { margin-bottom: 24px; }
+  .gate-card { max-width: 380px; }
+  #permGate { padding: 40px; }
+}
