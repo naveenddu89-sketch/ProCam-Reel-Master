@@ -48,6 +48,17 @@ class MicRecorder(
         private set
 
     fun start() {
+        try {
+            startInternal()
+        } catch (t: Throwable) {
+            // Never leak a half-open AudioRecord/MediaCodec when setup fails.
+            running = false
+            releaseAll()
+            throw t
+        }
+    }
+
+    private fun startInternal() {
         outFile.parentFile?.mkdirs()
 
         val source = if (device?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {

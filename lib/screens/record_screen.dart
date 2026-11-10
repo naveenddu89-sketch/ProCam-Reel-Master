@@ -84,6 +84,9 @@ class _RecordScreenState extends State<RecordScreen> {
     if (!ok) return;
 
     await _engine.start();
+    // CameraX now binds on a coalesced background tick (it used to block the
+    // UI thread). Wait for the real bind before reading exposure/quality.
+    await _waitReady();
     final dirs = await _engine.mediaDirs();
     final range = await _engine.exposureRange();
     final mics = await _engine.audioInputs();
@@ -99,6 +102,12 @@ class _RecordScreenState extends State<RecordScreen> {
       _is4k = k4;
       _prompterOn = true;
     });
+  }
+
+  Future<void> _waitReady() async {
+    for (var i = 0; i < 40 && !_ready; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
   }
 
   void _onEngineEvent(Map<String, dynamic> e) {
@@ -236,9 +245,13 @@ class _RecordScreenState extends State<RecordScreen> {
       _snack(_recording ? 'Stop recording to change quality' : '4K not supported');
       return;
     }
-    // Give CameraX a beat to finish binding before reading the real size.
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-    final real = await _engine.is4k();
+    // CameraX rebinds on its own tick now; poll briefly for the real size.
+    var real = _is4k;
+    for (var i = 0; i < 8; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      real = await _engine.is4k();
+      if (real == next) break;
+    }
     if (!mounted) return;
     setState(() => _is4k = real);
     Analytics.instance.log('quality_change', {
@@ -845,6 +858,7 @@ class _ExportSheetState extends State<_ExportSheet> {
   bool _exporting = false;
   bool _done = false;
   int _progress = 0;
+  double _sizeMb = 0;
   String? _output;
   String? _error;
   String? _thumb;
@@ -883,10 +897,11 @@ class _ExportSheetState extends State<_ExportSheet> {
         },
       );
       final thumb = await ClipRepository.thumbnail(out);
+      final mb = File(out).lengthSync() / (1024 * 1024);
       Analytics.instance.log('export_done', {
         'fps': _fps,
         'seconds': DateTime.now().difference(started).inSeconds,
-        'mb': (File(out).lengthSync() / (1024 * 1024) * 10).round() / 10,
+        'mb': (mb * 10).round() / 10,
         'has_audio': audioOk ? 1 : 0,
       });
       if (!mounted) return;
@@ -895,6 +910,7 @@ class _ExportSheetState extends State<_ExportSheet> {
         _done = true;
         _output = out;
         _thumb = thumb;
+        _sizeMb = mb;
       });
     } catch (e) {
       Analytics.instance.log('export_failed', {'fps': _fps, 'error': '$e'});
@@ -930,7 +946,7 @@ class _ExportSheetState extends State<_ExportSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final sizeMb = _output == null ? 0 : File(_output!).lengthSync() / (1024 * 1024);
+    final sizeMb = _sizeMb;
 
     return PopScope(
       canPop: !_exporting,

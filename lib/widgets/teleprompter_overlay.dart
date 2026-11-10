@@ -76,6 +76,36 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
   bool _showSettings = false;
   bool _dragging = false;
 
+  // A 200k-character script rendered as one Text widget was laid out and
+  // repainted in full on every scroll frame, which froze the preview while
+  // recording. Chunking lets ListView.builder touch only visible lines.
+  List<String> _chunks = const [];
+  String? _chunksSource;
+
+  static List<String> _splitScript(String text) {
+    const maxChunk = 480;
+    final out = <String>[];
+    for (final para in text.split('\n')) {
+      if (para.length <= maxChunk) {
+        out.add(para);
+        continue;
+      }
+      var start = 0;
+      while (start < para.length) {
+        var end = start + maxChunk;
+        if (end < para.length) {
+          final space = para.lastIndexOf(' ', end);
+          if (space > start + maxChunk ~/ 2) end = space;
+        } else {
+          end = para.length;
+        }
+        out.add(para.substring(start, end));
+        start = end;
+      }
+    }
+    return out.isEmpty ? const [''] : out;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -112,6 +142,9 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
     _last = elapsed;
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
+    // Short script: nothing to scroll, keep the ticker running instead of
+    // pausing the moment play is tapped.
+    if (pos.maxScrollExtent <= 0) return;
     var next = _scroll.offset + widget.controller.speed * dt;
     if (next >= pos.maxScrollExtent) {
       // End of a long script: hold the last line instead of snapping back.
@@ -139,6 +172,10 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
   Widget build(BuildContext context) {
     final c = widget.controller;
     final mq = MediaQuery.sizeOf(context);
+    if (_chunksSource != c.text) {
+      _chunksSource = c.text;
+      _chunks = _splitScript(c.text);
+    }
 
     return Positioned(
       left: _left,
@@ -175,19 +212,25 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
                   constraints: BoxConstraints(maxHeight: mq.height * 0.34),
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
-                    child: SingleChildScrollView(
+                    child: ListView.builder(
                       controller: _scroll,
                       physics: const NeverScrollableScrollPhysics(),
-                      child: Text(
-                        c.text,
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(c.opacity),
-                          fontSize: c.fontSize,
-                          height: 1.35,
-                          fontWeight: FontWeight.w600,
-                          shadows: const [
-                            Shadow(color: Colors.black87, blurRadius: 8),
-                          ],
+                      padding: EdgeInsets.zero,
+                      cacheExtent: 240,
+                      itemCount: _chunks.length,
+                      itemBuilder: (_, i) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(
+                          _chunks[i],
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(c.opacity),
+                            fontSize: c.fontSize,
+                            height: 1.35,
+                            fontWeight: FontWeight.w600,
+                            shadows: const [
+                              Shadow(color: Colors.black87, blurRadius: 8),
+                            ],
+                          ),
                         ),
                       ),
                     ),

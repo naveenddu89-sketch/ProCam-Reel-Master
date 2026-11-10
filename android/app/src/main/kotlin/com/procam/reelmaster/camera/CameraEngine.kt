@@ -2,6 +2,8 @@ package com.procam.reelmaster.camera
 
 import android.content.Context
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.view.Surface
 import androidx.camera.core.AspectRatio
@@ -42,7 +44,13 @@ class CameraEngine(
     private val emitEvent: (Map<String, Any?>) -> Unit,
 ) {
     private val mainExecutor = ContextCompat.getMainExecutor(context)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val cameraExecutor: ExecutorService = Executors.newFixedThreadPool(2)
+
+    // AudioRecord + MediaCodec setup/teardown costs 300-2000 ms. Doing that on
+    // the main thread froze the UI every time record started or stopped, so all
+    // mic work lives on its own single thread.
+    private val audioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
@@ -59,6 +67,10 @@ class CameraEngine(
     private var use4k = false
     private var startRequested = false
     private var bound = false
+    // Which configuration is currently bound. Rebinding with the same values is
+    // a no-op: unbind/rebind cycles were freezing the preview on app start.
+    private var boundKey: String? = null
+    private var rebindScheduled = false
 
     // ---------------------------------------------------------------- lifecycle
 
@@ -66,14 +78,14 @@ class CameraEngine(
         startRequested = true
         val existing = provider
         if (existing != null) {
-            rebind()
+            scheduleRebind()
             return
         }
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             try {
                 provider = future.get()
-                rebind()
+                scheduleRebind()
             } catch (t: Throwable) {
                 error("Camera init failed: ${t.message}")
             }
@@ -82,7 +94,7 @@ class CameraEngine(
 
     fun attachPreview(view: PreviewView) {
         previewView = view
-        if (startRequested) rebind()
+        if (startRequested) scheduleRebind()
     }
 
     fun detachPreview(view: PreviewView) {
@@ -94,22 +106,25 @@ class CameraEngine(
             }
             camera = null
             bound = false
+            boundKey = null
             startRequested = false
         }
     }
 
     fun pause() {
         if (recording != null) return
+        startRequested = false
         try {
             provider?.unbindAll()
         } catch (_: Throwable) {
         }
         camera = null
         bound = false
-        startRequested = false
+        boundKey = null
     }
 
     fun shutdown() {
+        startRequested = false
         if (recording != null) {
             try {
                 recording?.stop()
@@ -117,13 +132,28 @@ class CameraEngine(
             }
         }
         pendingStop = null
-        try {
-            mic?.stop()
-        } catch (_: Throwable) {
-        }
+        val micLocal = mic
         mic = null
+        if (micLocal != null) {
+            try {
+                // Flushing the AAC muxer can take a moment; never on the UI thread.
+                audioExecutor.execute {
+                    try {
+                        micLocal.stop()
+                    } catch (_: Throwable) {
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
         try {
             provider?.unbindAll()
+        } catch (_: Throwable) {
+        }
+        bound = false
+        boundKey = null
+        try {
+            audioExecutor.shutdown()
         } catch (_: Throwable) {
         }
         cameraExecutor.shutdown()
@@ -135,10 +165,27 @@ class CameraEngine(
 
     // ------------------------------------------------------------------- binding
 
+    /**
+     * Coalesces start() + attachPreview() + provider-ready into one bind.
+     * Binding on every call caused two or three unbind/rebind cycles during
+     * launch, which looked like a frozen/black preview on slower phones.
+     */
+    private fun scheduleRebind() {
+        if (rebindScheduled) return
+        rebindScheduled = true
+        mainHandler.postDelayed({
+            rebindScheduled = false
+            if (startRequested) rebind()
+        }, 60L)
+    }
+
     private fun rebind() {
         val pv = previewView ?: return
         val prov = provider ?: return
         if (recording != null) return
+
+        val key = "$aspect|$use4k|$lensFacing"
+        if (bound && boundKey == key) return
 
         try {
             prov.unbindAll()
@@ -188,8 +235,11 @@ class CameraEngine(
             )
             videoCapture = capture
             bound = true
+            boundKey = key
             emitEvent(mapOf("type" to "ready"))
         } catch (t: Throwable) {
+            bound = false
+            boundKey = null
             error("Camera bind failed: ${t.message}")
         }
     }
@@ -200,14 +250,14 @@ class CameraEngine(
         if (recording != null) return false
         if (value !in setOf("9:16", "16:9", "1:1", "4:5")) return false
         aspect = value
-        if (bound) rebind()
+        if (startRequested) scheduleRebind()
         return true
     }
 
     fun setQuality4k(enabled: Boolean): Boolean {
         if (recording != null) return false
         use4k = enabled
-        if (bound) rebind()
+        if (startRequested) scheduleRebind()
         return true
     }
 
@@ -229,7 +279,7 @@ class CameraEngine(
             camera?.cameraControl?.enableTorch(false)
         } catch (_: Throwable) {
         }
-        if (bound) rebind()
+        if (startRequested) scheduleRebind()
         return true
     }
 
@@ -290,9 +340,17 @@ class CameraEngine(
 
     // ----------------------------------------------------------------- recording
 
-    fun startRecording(): Boolean {
-        val capture = videoCapture ?: return false
-        if (recording != null) return false
+    /**
+     * Async on purpose: opening AudioRecord + MediaCodec blocks for a few
+     * hundred milliseconds and used to stall the UI thread on every take.
+     * [callback] always runs on the main thread.
+     */
+    fun startRecording(callback: (Boolean) -> Unit) {
+        val capture = videoCapture
+        if (capture == null || !bound || recording != null) {
+            callback(false)
+            return
+        }
 
         val dir = File(
             context.getExternalFilesDir(Environment.DIRECTORY_MOVIES),
@@ -300,7 +358,8 @@ class CameraEngine(
         )
         if (!dir.exists() && !dir.mkdirs()) {
             error("Cannot create output folder")
-            return false
+            callback(false)
+            return
         }
 
         // A long take needs room; CameraX deletes failed output on storage
@@ -309,7 +368,8 @@ class CameraEngine(
             val free = StatFs(dir.absolutePath).availableBytes
             if (free < 300L * 1024 * 1024) {
                 error("Storage almost full — free at least 300 MB")
-                return false
+                callback(false)
+                return
             }
         } catch (_: Throwable) {
         }
@@ -317,27 +377,51 @@ class CameraEngine(
         val stamp = System.currentTimeMillis()
         val videoFile = File(dir, "PROCAM_$stamp.mp4")
         val audioFile = File(dir, "PROCAM_${stamp}_audio.m4a")
-
         val audio = MicRecorder(context, audioFile, audioRoute.selectedDevice)
-        return try {
-            audio.start()
-            mic = audio
 
-            val options = FileOutputOptions.Builder(videoFile).build()
-            val pending = capture.output.prepareRecording(context, options)
-            // No withAudioEnabled(): CameraX's default mic is bypassed.
-            recording = pending.start(mainExecutor) { event ->
-                onVideoEvent(event, videoFile, audioFile)
+        try {
+            audioExecutor.execute {
+                // Mic first, off the UI thread. If it fails we still record the
+                // video instead of refusing the whole take.
+                val micOk = try {
+                    audio.start()
+                    true
+                } catch (t: Throwable) {
+                    error("Mic unavailable: ${t.message}")
+                    false
+                }
+
+                mainHandler.post {
+                    if (recording != null || !startRequested || !bound) {
+                        if (micOk) stopMicAsync(audio)
+                        callback(false)
+                        return@post
+                    }
+                    if (micOk) mic = audio
+                    try {
+                        val options = FileOutputOptions.Builder(videoFile).build()
+                        val pending = capture.output.prepareRecording(context, options)
+                        // No withAudioEnabled(): CameraX's default mic is bypassed.
+                        recording = pending.start(mainExecutor) { event ->
+                            onVideoEvent(event, videoFile, audioFile)
+                        }
+                        callback(true)
+                    } catch (t: Throwable) {
+                        if (micOk) stopMicAsync(audio)
+                        mic = null
+                        error("Record start failed: ${t.message}")
+                        callback(false)
+                    }
+                }
             }
-            true
         } catch (t: Throwable) {
+            // Executor already shut down (activity dying).
             try {
                 audio.stop()
             } catch (_: Throwable) {
             }
-            mic = null
             error("Record start failed: ${t.message}")
-            false
+            callback(false)
         }
     }
 
@@ -353,6 +437,21 @@ class CameraEngine(
         } catch (t: Throwable) {
             pendingStop = null
             callback(null)
+        }
+    }
+
+    /** Flushes the AAC muxer on the audio thread, then calls [after] on main. */
+    private fun stopMicAsync(micRecorder: MicRecorder, after: (() -> Unit)? = null) {
+        try {
+            audioExecutor.execute {
+                try {
+                    micRecorder.stop()
+                } catch (_: Throwable) {
+                }
+                if (after != null) mainHandler.post { after() }
+            }
+        } catch (_: Throwable) {
+            if (after != null) mainHandler.post { after() }
         }
     }
 
@@ -377,10 +476,6 @@ class CameraEngine(
                 val micLocal = mic
                 mic = null
                 val audioStart = micLocal?.startNs ?: 0L
-                try {
-                    micLocal?.stop()
-                } catch (_: Throwable) {
-                }
 
                 val offsetMs = if (audioStart > 0 && videoStartNs > 0) {
                     ((audioStart - videoStartNs) / 1_000_000L).toInt()
@@ -389,45 +484,52 @@ class CameraEngine(
                 }
                 val durationMs =
                     event.recordingStats.recordedDurationNanos / 1_000_000L
+                val hadError = event.hasError()
                 recording = null
 
-                if (event.hasError()) {
+                if (hadError) {
                     error(
                         "Recording error ${event.error}: " +
                             (event.cause?.message ?: "unknown"),
                     )
+                }
+
+                val finish: () -> Unit = {
                     // Keep a playable partial take (storage full, app killed)
                     // instead of throwing away minutes of footage.
                     val keep = videoFile.exists() && videoFile.length() > 100_000
-                    if (!keep) {
+                    if (hadError && !keep) {
                         videoFile.delete()
                         audioFile.delete()
                         val cb = pendingStop
                         pendingStop = null
                         cb?.invoke(null)
-                        return
+                    } else {
+                        val payload = mapOf<String, Any?>(
+                            "type" to "recording_finalized",
+                            "video" to videoFile.absolutePath,
+                            "audio" to if (audioFile.exists() &&
+                                audioFile.length() > 1024
+                            ) {
+                                audioFile.absolutePath
+                            } else {
+                                null
+                            },
+                            "durationMs" to durationMs,
+                            "audioOffsetMs" to offsetMs,
+                        )
+                        emitEvent(payload)
+                        val cb = pendingStop
+                        pendingStop = null
+                        cb?.invoke(payload)
                     }
                 }
 
-                val payload = mapOf<String, Any?>(
-                    "type" to "recording_finalized",
-                    "video" to videoFile.absolutePath,
-                    "audio" to if (audioFile.exists() &&
-                        audioFile.length() > 1024
-                    ) {
-                        audioFile.absolutePath
-                    } else {
-                        null
-                    },
-                    "durationMs" to durationMs,
-                    "audioOffsetMs" to offsetMs,
-                )
-                emitEvent(payload)
-
-                val cb = pendingStop
-                pendingStop = null
-                cb?.invoke(payload)
-            }
+                if (micLocal != null) {
+                    stopMicAsync(micLocal, finish)
+                } else {
+                    finish()
+                }            }
 
             else -> Unit
         }

@@ -44,9 +44,11 @@ class ProcamEngine {
 
   /// Resolves only after CameraX finalizes the MP4 (file flushed to disk).
   Future<RecordingResult?> stopRecording() async {
+    // The mic muxer is flushed on a background thread now, so long takes can
+    // take a little longer without blocking the UI. Never hang forever.
     final map = await _ch
         .invokeMapMethod<String, dynamic>('stopRecording')
-        .timeout(const Duration(seconds: 20), onTimeout: () => null);
+        .timeout(const Duration(seconds: 60), onTimeout: () => null);
     return map == null ? null : RecordingResult.fromMap(map);
   }
 

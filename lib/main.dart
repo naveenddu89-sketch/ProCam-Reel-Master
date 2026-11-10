@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -5,7 +7,7 @@ import 'core/theme.dart';
 import 'screens/record_screen.dart';
 import 'services/analytics.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -14,9 +16,10 @@ Future<void> main() async {
     systemNavigationBarColor: kBg,
     systemNavigationBarIconBrightness: Brightness.light,
   ));
-  // Local, bounded (4 s) and failure-tolerant: off until Firebase is configured.
-  await Analytics.instance.init();
   runApp(const ProCamApp());
+  // Fire-and-forget: analytics must never delay the first frame, and it is a
+  // no-op until Firebase is configured.
+  unawaited(Analytics.instance.init());
 }
 
 class ProCamApp extends StatelessWidget {

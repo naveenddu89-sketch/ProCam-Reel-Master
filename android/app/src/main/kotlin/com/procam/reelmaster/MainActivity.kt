@@ -95,9 +95,14 @@ class MainActivity : FlutterActivity() {
             "is4k" -> result.success(engine.is4k())
             "switchCamera" -> result.success(engine.switchCamera())
             "startRecording" -> {
-                val ok = engine.startRecording()
-                setKeepScreenOn(ok)
-                result.success(ok)
+                // Mic + encoder setup runs off the UI thread; the reply lands
+                // on the main thread when the take has actually started.
+                engine.startRecording { ok ->
+                    runOnUiThread {
+                        setKeepScreenOn(ok)
+                        result.success(ok)
+                    }
+                }
             }
 
             "stopRecording" -> {
@@ -165,12 +170,14 @@ class MainActivity : FlutterActivity() {
 
             "share" -> {
                 val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-                result.success(
-                    clips.share(
-                        args["path"] as? String ?: "",
-                        args["target"] as? String ?: "generic",
-                    ),
-                )
+                val path = args["path"] as? String ?: ""
+                val target = args["target"] as? String ?: "generic"
+                // Package-manager lookups + FileProvider can take a moment;
+                // never do them on the UI thread.
+                ioExecutor.execute {
+                    val ok = clips.share(path, target)
+                    runOnUiThread { result.success(ok) }
+                }
             }
 
             "delete" -> {
@@ -182,8 +189,11 @@ class MainActivity : FlutterActivity() {
             }
 
             "open" -> {
-                clips.open(call.arguments as? String ?: "")
-                result.success(null)
+                val path = call.arguments as? String ?: ""
+                ioExecutor.execute {
+                    clips.open(path)
+                    runOnUiThread { result.success(null) }
+                }
             }
 
             else -> result.notImplemented()
