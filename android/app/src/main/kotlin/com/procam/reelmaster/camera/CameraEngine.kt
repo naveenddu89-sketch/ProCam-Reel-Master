@@ -71,11 +71,14 @@ class CameraEngine(
     // a no-op: unbind/rebind cycles were freezing the preview on app start.
     private var boundKey: String? = null
     private var rebindScheduled = false
+    // One automatic recovery bind per start() if the preview never streams.
+    private var recoveryUsed = false
 
     // ---------------------------------------------------------------- lifecycle
 
     fun start() {
         startRequested = true
+        recoveryUsed = false
         val existing = provider
         if (existing != null) {
             scheduleRebind()
@@ -114,6 +117,7 @@ class CameraEngine(
     fun pause() {
         if (recording != null) return
         startRequested = false
+        recoveryUsed = false
         try {
             provider?.unbindAll()
         } catch (_: Throwable) {
@@ -176,7 +180,24 @@ class CameraEngine(
         mainHandler.postDelayed({
             rebindScheduled = false
             if (startRequested) rebind()
-        }, 60L)
+        }, 120L)
+    }
+
+    /**
+     * Some devices report a bound camera but never deliver frames (frozen
+     * preview). One forced re-bind usually recovers it.
+     */
+    private fun armPreviewWatchdog() {
+        mainHandler.postDelayed({
+            if (!startRequested || recording != null || recoveryUsed) return@postDelayed
+            val pv = previewView ?: return@postDelayed
+            if (pv.previewStreamState.value == PreviewView.StreamState.STREAMING) {
+                return@postDelayed
+            }
+            recoveryUsed = true
+            boundKey = null
+            scheduleRebind()
+        }, 2500L)
     }
 
     private fun rebind() {
@@ -237,6 +258,7 @@ class CameraEngine(
             bound = true
             boundKey = key
             emitEvent(mapOf("type" to "ready"))
+            armPreviewWatchdog()
         } catch (t: Throwable) {
             bound = false
             boundKey = null
