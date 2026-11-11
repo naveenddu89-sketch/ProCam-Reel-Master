@@ -1,11 +1,19 @@
 package com.procam.reelmaster.camera
 
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.util.Log
+import android.util.Range
 import android.view.Surface
+import androidx.camera.camera.interop.Camera2Interop
+import androidx.camera.camera.interop.ExperimentalCamera2Interop
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -28,6 +36,12 @@ import com.procam.reelmaster.audio.MicRecorder
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * CameraX VideoCapture engine.
@@ -47,10 +61,10 @@ class CameraEngine(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val cameraExecutor: ExecutorService = Executors.newFixedThreadPool(2)
 
-    // AudioRecord + MediaCodec setup/teardown costs 300-2000 ms. Doing that on
-    // the main thread froze the UI every time record started or stopped, so all
-    // mic work lives on its own single thread.
-    private val audioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    // AudioRecord + MediaCodec setup/teardown, plus the MediaMuxer stop/flush
+    // on save, cost 300-2000 ms. Every mic operation runs on Dispatchers.IO so
+    // the Android main thread (and the preview) never blocks.
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
@@ -141,7 +155,7 @@ class CameraEngine(
         if (micLocal != null) {
             try {
                 // Flushing the AAC muxer can take a moment; never on the UI thread.
-                audioExecutor.execute {
+                ioScope.launch {
                     try {
                         micLocal.stop()
                     } catch (_: Throwable) {
@@ -157,7 +171,7 @@ class CameraEngine(
         bound = false
         boundKey = null
         try {
-            audioExecutor.shutdown()
+            ioScope.cancel()
         } catch (_: Throwable) {
         }
         cameraExecutor.shutdown()
@@ -208,6 +222,27 @@ class CameraEngine(
         val key = "$aspect|$use4k|$lensFacing"
         if (bound && boundKey == key) return
 
+        // First try the full iPhone-grade tuning. If a device rejects HDR/ZSL/
+        // fixed-60 requests, fall back to plain CameraX so the camera still
+        // works instead of dying.
+        if (bind(prov, pv, key, hq = true)) return
+        if (!bind(prov, pv, key, hq = false)) {
+            error("Camera bind failed on this device")
+        }
+    }
+
+    /**
+     * Binds Preview + VideoCapture. [hq] enables the extra Camera2 requests
+     * (60 fps fixed range, HDR scene, OIS + EIS stabilization, ZSL). Returns
+     * true when the use cases were bound.
+     */
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun bind(
+        prov: ProcessCameraProvider,
+        pv: PreviewView,
+        key: String,
+        hq: Boolean,
+    ): Boolean {
         try {
             prov.unbindAll()
 
@@ -218,10 +253,38 @@ class CameraEngine(
                 AspectRatio.RATIO_4_3
             }
 
-            val previewUseCase = Preview.Builder()
+            // Fixed 60 fps where supported, else the best fixed range.
+            val fpsRange = targetFpsRange() ?: Range(30, 30)
+            val hdr = hq && supportsHdrScene()
+
+            val previewBuilder = Preview.Builder()
                 .setTargetAspectRatio(cxAspect)
                 .setTargetRotation(rotation)
-                .build()
+            if (hq) {
+                try {
+                    val extender = Camera2Interop.Extender(previewBuilder)
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                        fpsRange,
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        // Zero shutter lag: keep the preview pipeline primed.
+                        extender.setCaptureRequestOption(
+                            CaptureRequest.CONTROL_ENABLE_ZSL,
+                            true,
+                        )
+                    }
+                    if (hdr) {
+                        extender.setCaptureRequestOption(
+                            CaptureRequest.CONTROL_SCENE_MODE,
+                            CaptureRequest.CONTROL_SCENE_MODE_HDR,
+                        )
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Preview HQ tuning skipped: ${t.message}")
+                }
+            }
+            val previewUseCase = previewBuilder.build()
                 .also { it.setSurfaceProvider(pv.surfaceProvider) }
 
             // FHD resolves to 1920x1080 for 16:9 and 1440x1080 for 4:3, so a
@@ -236,12 +299,39 @@ class CameraEngine(
                 fallback = FallbackStrategy.higherQualityOrLowerThan(Quality.HD)
             }
 
-            val recorder = Recorder.Builder()
+            val recorderBuilder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(quality, fallback))
                 .setAspectRatio(cxAspect)
-                .setTargetVideoEncodingBitRate(if (use4k) 45_000_000 else 20_000_000)
+                // 60 Mbps master. CameraX caps this at the hardware encoder's
+                // real limit, so the recorded clip keeps maximum detail.
+                .setTargetVideoEncodingBitRate(MASTER_BITRATE)
                 .setExecutor(cameraExecutor)
-                .build()
+            if (hq) {
+                try {
+                    val extender = Camera2Interop.Extender(recorderBuilder)
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                        fpsRange,
+                    )
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON,
+                    )
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON,
+                    )
+                    if (hdr) {
+                        extender.setCaptureRequestOption(
+                            CaptureRequest.CONTROL_SCENE_MODE,
+                            CaptureRequest.CONTROL_SCENE_MODE_HDR,
+                        )
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Recorder HQ tuning skipped: ${t.message}")
+                }
+            }
+            val recorder = recorderBuilder.build()
 
             val capture = VideoCapture.withOutput(recorder)
             val selector = CameraSelector.Builder()
@@ -259,10 +349,75 @@ class CameraEngine(
             boundKey = key
             emitEvent(mapOf("type" to "ready"))
             armPreviewWatchdog()
+            return true
         } catch (t: Throwable) {
             bound = false
             boundKey = null
-            error("Camera bind failed: ${t.message}")
+            Log.w(TAG, "Camera bind failed (hq=$hq): ${t.message}")
+            return false
+        }
+    }
+
+    // ------------------------------------------------------------------- tuning
+
+    /**
+     * Fixed 60 fps where the sensor supports it; otherwise the highest fixed
+     * range available. A fixed range keeps the master clip truly CFR.
+     */
+    private fun targetFpsRange(): Range<Int>? {
+        return try {
+            val chars = characteristicsForLens() ?: return null
+            val ranges = chars.get(
+                CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES,
+            ) ?: return null
+            ranges
+                .filter { it.lower == it.upper }
+                .maxByOrNull { it.upper }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun supportsHdrScene(): Boolean {
+        return try {
+            val chars = characteristicsForLens() ?: return false
+            val modes = chars.get(
+                CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES,
+            ) ?: return false
+            modes.contains(CameraCharacteristics.CONTROL_SCENE_MODE_HDR)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun characteristicsForLens(): CameraCharacteristics? {
+        val id = cameraIdForLens() ?: return null
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            cm.getCameraCharacteristics(id)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun cameraIdForLens(): String? {
+        val wanted = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+            CameraCharacteristics.LENS_FACING_BACK
+        } else {
+            CameraCharacteristics.LENS_FACING_FRONT
+        }
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            cm.cameraIdList.firstOrNull { id ->
+                try {
+                    cm.getCameraCharacteristics(id)
+                        .get(CameraCharacteristics.LENS_FACING) == wanted
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+        } catch (_: Throwable) {
+            null
         }
     }
 
@@ -402,8 +557,8 @@ class CameraEngine(
         val audio = MicRecorder(context, audioFile, audioRoute.selectedDevice)
 
         try {
-            audioExecutor.execute {
-                // Mic first, off the UI thread. If it fails we still record the
+            ioScope.launch {
+                // Mic first, on Dispatchers.IO. If it fails we still record the
                 // video instead of refusing the whole take.
                 val micOk = try {
                     audio.start()
@@ -413,11 +568,11 @@ class CameraEngine(
                     false
                 }
 
-                mainHandler.post {
+                withContext(Dispatchers.Main) {
                     if (recording != null || !startRequested || !bound) {
                         if (micOk) stopMicAsync(audio)
                         callback(false)
-                        return@post
+                        return@withContext
                     }
                     if (micOk) mic = audio
                     try {
@@ -462,18 +617,19 @@ class CameraEngine(
         }
     }
 
-    /** Flushes the AAC muxer on the audio thread, then calls [after] on main. */
+    /**
+     * Flushes the AAC/MediaMuxer on Dispatchers.IO, then calls [after] on the
+     * main thread. The flush is what used to freeze the UI after every take.
+     */
     private fun stopMicAsync(micRecorder: MicRecorder, after: (() -> Unit)? = null) {
-        try {
-            audioExecutor.execute {
-                try {
-                    micRecorder.stop()
-                } catch (_: Throwable) {
-                }
-                if (after != null) mainHandler.post { after() }
+        ioScope.launch {
+            try {
+                micRecorder.stop()
+            } catch (_: Throwable) {
             }
-        } catch (_: Throwable) {
-            if (after != null) mainHandler.post { after() }
+            if (after != null) {
+                withContext(Dispatchers.Main) { after() }
+            }
         }
     }
 
@@ -551,7 +707,8 @@ class CameraEngine(
                     stopMicAsync(micLocal, finish)
                 } else {
                     finish()
-                }            }
+                }
+            }
 
             else -> Unit
         }
@@ -559,5 +716,15 @@ class CameraEngine(
 
     private fun error(message: String) {
         emitEvent(mapOf("type" to "error", "message" to message))
+    }
+
+    private companion object {
+        private const val TAG = "ProCamCamera"
+
+        /**
+         * iPhone-grade master bitrate: 60 Mbps for both 1080p60 and 4K60.
+         * CameraX caps it at the hardware encoder's real limit.
+         */
+        private const val MASTER_BITRATE = 60_000_000
     }
 }

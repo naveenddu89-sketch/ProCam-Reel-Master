@@ -70,9 +70,14 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
   final ScrollController _scroll = ScrollController();
   Duration _last = Duration.zero;
 
-  double _left = 16;
-  double _top = 120;
+  // The panel lives in the safe band between the top bar and the bottom
+  // controls so it can never cover the record button or the status bar.
+  double _left = -1;
+  double _top = -1;
   double _width = 320;
+  double _panelHeight = 220;
+  double _minTop = 80;
+  double _maxTop = 400;
   bool _showSettings = false;
   bool _dragging = false;
 
@@ -118,9 +123,27 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
   void didChangeDependencies() {
     super.didChangeDependencies();
     final size = MediaQuery.sizeOf(context);
-    _width = (size.width - 32).clamp(220.0, 460.0).toDouble();
+    final pad = MediaQuery.paddingOf(context);
+    final topBarH = pad.top + 52;
+    final bottomBarH = pad.bottom + 214;
+
+    _width = (size.width - 24).clamp(220.0, 460.0).toDouble();
+    _panelHeight = (size.height * 0.26).clamp(150.0, 300.0).toDouble();
+
+    _minTop = topBarH + 6;
+    _maxTop = (size.height - bottomBarH - _panelHeight - 8)
+        .clamp(_minTop, size.height)
+        .toDouble();
+
+    if (_left < 0) {
+      _left = ((size.width - _width) / 2)
+          .clamp(8.0, size.width - _width - 8)
+          .toDouble();
+    }
+    if (_top < 0) _top = _minTop + 12;
+
     _left = _left.clamp(8.0, size.width - _width - 8).toDouble();
-    _top = _top.clamp(80.0, size.height - 220).toDouble();
+    _top = _top.clamp(_minTop, _maxTop).toDouble();
   }
 
   void _syncTicker() {
@@ -134,12 +157,16 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
     if (mounted) setState(() {});
   }
 
+  /// Single vsync callback (Flutter's Ticker maps to Android's Choreographer
+  /// frame callback). It only calls jumpTo(): no setState, no relayout, no
+  /// timers and no busy loop, so a long script cannot heat up the phone.
   void _onTick(Duration elapsed) {
     if (!widget.controller.playing) return;
     final dt = _last == Duration.zero
         ? 0.016
         : (elapsed - _last).inMicroseconds / 1000000.0;
     _last = elapsed;
+    if (dt <= 0) return;
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
     // Short script: nothing to scroll, keep the ticker running instead of
@@ -177,66 +204,71 @@ class _TeleprompterOverlayState extends State<TeleprompterOverlay>
       _chunks = _splitScript(c.text);
     }
 
+    // RepaintBoundary isolates the scrolling text from the rest of the UI:
+    // jumpTo() per frame only invalidates this panel, never the whole stack.
     return Positioned(
       left: _left,
       top: _top,
       width: _width,
-      child: GestureDetector(
-        onPanStart: (_) => setState(() => _dragging = true),
-        onPanUpdate: (d) {
-          setState(() {
-            _left = (_left + d.delta.dx)
-                .clamp(8.0, mq.width - _width - 8)
-                .toDouble();
-            _top = (_top + d.delta.dy)
-                .clamp(64.0, mq.height - 160)
-                .toDouble();
-          });
-        },
-        onPanEnd: (_) => setState(() => _dragging = false),
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 150),
-          opacity: _dragging ? 0.95 : 1,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.30 * c.opacity),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withOpacity(0.12)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _toolbar(c),
-                if (_showSettings) _settings(c),
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: mq.height * 0.34),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
-                    child: ListView.builder(
-                      controller: _scroll,
-                      physics: const NeverScrollableScrollPhysics(),
-                      padding: EdgeInsets.zero,
-                      cacheExtent: 240,
-                      itemCount: _chunks.length,
-                      itemBuilder: (_, i) => Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Text(
-                          _chunks[i],
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(c.opacity),
-                            fontSize: c.fontSize,
-                            height: 1.35,
-                            fontWeight: FontWeight.w600,
-                            shadows: const [
-                              Shadow(color: Colors.black87, blurRadius: 8),
-                            ],
+      child: RepaintBoundary(
+        child: GestureDetector(
+          onPanStart: (_) => setState(() => _dragging = true),
+          onPanUpdate: (d) {
+            setState(() {
+              _left = (_left + d.delta.dx)
+                  .clamp(8.0, mq.width - _width - 8)
+                  .toDouble();
+              _top = (_top + d.delta.dy)
+                  .clamp(_minTop, _maxTop)
+                  .toDouble();
+            });
+          },
+          onPanEnd: (_) => setState(() => _dragging = false),
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 150),
+            opacity: _dragging ? 0.95 : 1,
+            child: Container(
+              height: _panelHeight,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.30 * c.opacity),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.12)),
+              ),
+              child: Column(
+                children: [
+                  _toolbar(c),
+                  if (_showSettings) _settings(c),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 2, 14, 10),
+                      child: ListView.builder(
+                        controller: _scroll,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: EdgeInsets.zero,
+                        cacheExtent: 120,
+                        addAutomaticKeepAlives: false,
+                        itemCount: _chunks.length,
+                        itemBuilder: (_, i) => Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: Text(
+                            _chunks[i],
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(c.opacity),
+                              fontSize: c.fontSize,
+                              height: 1.35,
+                              fontWeight: FontWeight.w600,
+                              shadows: const [
+                                Shadow(color: Colors.black87, blurRadius: 8),
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

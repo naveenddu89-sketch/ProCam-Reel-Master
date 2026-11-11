@@ -47,6 +47,8 @@ kotlin {
 dependencies {
     val camerax = "1.5.3"
     implementation("androidx.core:core-ktx:1.13.1")
+    // Dispatchers.IO for mic setup + MediaMuxer flush: never block the UI.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
