@@ -12,8 +12,8 @@ import android.os.StatFs
 import android.util.Log
 import android.util.Range
 import android.view.Surface
-import androidx.camera.camera.interop.Camera2Interop
-import androidx.camera.camera.interop.ExperimentalCamera2Interop
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
