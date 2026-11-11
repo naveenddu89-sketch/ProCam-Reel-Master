@@ -85,6 +85,11 @@ class CameraEngine(
     // a no-op: unbind/rebind cycles were freezing the preview on app start.
     private var boundKey: String? = null
     private var rebindScheduled = false
+    // CameraX HQ tuning (fixed 60 fps, HDR scene, OIS/EIS, ZSL) is opt-in:
+    // several mid-range sensors stall or never stream once these requests are
+    // attached. Plain CameraX binds reliably everywhere, so the default is the
+    // safe profile and [setHqMode] upgrades on demand.
+    private var hqEnabled = false
     // One automatic recovery bind per start() if the preview never streams.
     private var recoveryUsed = false
 
@@ -199,16 +204,24 @@ class CameraEngine(
 
     /**
      * Some devices report a bound camera but never deliver frames (frozen
-     * preview). One forced re-bind usually recovers it.
+     * preview) once the HQ requests are attached. Fall back to plain CameraX
+     * once so the app still works; only active in HQ mode.
      */
     private fun armPreviewWatchdog() {
         mainHandler.postDelayed({
-            if (!startRequested || recording != null || recoveryUsed) return@postDelayed
+            if (!startRequested || recording != null ||
+                recoveryUsed || !hqEnabled
+            ) {
+                return@postDelayed
+            }
             val pv = previewView ?: return@postDelayed
             if (pv.previewStreamState.value == PreviewView.StreamState.STREAMING) {
                 return@postDelayed
             }
             recoveryUsed = true
+            // HQ tuning silently stalls this camera; drop to plain CameraX.
+            hqEnabled = false
+            Log.w(TAG, "Preview never streamed with HQ tuning; using plain CameraX")
             boundKey = null
             scheduleRebind()
         }, 2500L)
@@ -222,10 +235,9 @@ class CameraEngine(
         val key = "$aspect|$use4k|$lensFacing"
         if (bound && boundKey == key) return
 
-        // First try the full iPhone-grade tuning. If a device rejects HDR/ZSL/
-        // fixed-60 requests, fall back to plain CameraX so the camera still
-        // works instead of dying.
-        if (bind(prov, pv, key, hq = true)) return
+        // Plain CameraX binds reliably everywhere. HQ tuning is opt-in
+        // (record screen > MAX toggle) and self-disables if it stalls.
+        if (bind(prov, pv, key, hq = hqEnabled)) return
         if (!bind(prov, pv, key, hq = false)) {
             error("Camera bind failed on this device")
         }
@@ -431,6 +443,23 @@ class CameraEngine(
         if (startRequested) scheduleRebind()
         return true
     }
+
+    /**
+     * Opt-in iPhone-grade profile: fixed 60 fps, HDR, OIS/EIS, ZSL. Off by
+     * default because several mid-range sensors never stream with these
+     * requests. Toggles re-bind the camera outside a take.
+     */
+    fun setHqMode(enabled: Boolean): Boolean {
+        if (recording != null) return false
+        if (hqEnabled == enabled) return true
+        hqEnabled = enabled
+        recoveryUsed = false
+        boundKey = null
+        if (startRequested) scheduleRebind()
+        return true
+    }
+
+    fun isHq(): Boolean = hqEnabled
 
     fun setQuality4k(enabled: Boolean): Boolean {
         if (recording != null) return false

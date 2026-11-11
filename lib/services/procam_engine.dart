@@ -36,6 +36,13 @@ class ProcamEngine {
 
   Future<bool> is4k() async => await _ch.invokeMethod<bool>('is4k') ?? false;
 
+  /// MAX Quality profile (fixed 60 FPS, HDR, stabilization, ZSL).
+  /// Off by default: some mid-range sensors never stream in this mode.
+  Future<bool> setHqMode(bool enabled) async =>
+      await _ch.invokeMethod<bool>('setHqMode', enabled) ?? false;
+
+  Future<bool> isHq() async => await _ch.invokeMethod<bool>('isHq') ?? false;
+
   Future<bool> switchCamera() async =>
       await _ch.invokeMethod<bool>('switchCamera') ?? false;
 

@@ -1,10 +1,12 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/theme.dart';
 import '../models/clip.dart';
 import '../services/analytics.dart';
+import '../services/crash_reporter.dart';
 import '../services/procam_engine.dart';
 
 /// Post-recording review: thumbnails, size/date, 1-tap share, delete.
@@ -50,6 +52,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
                 letterSpacing: 2.4,
                 fontWeight: FontWeight.w700)),
         actions: [
+          IconButton(
+            onPressed: _showErrorLog,
+            tooltip: 'Error log (for support)',
+            icon: const Icon(Icons.bug_report_outlined, size: 19),
+          ),
           IconButton(
             onPressed: _load,
             icon: const Icon(Icons.refresh_rounded, size: 19),
@@ -234,6 +241,79 @@ class _GalleryScreenState extends State<GalleryScreen> {
       ),
     );
     return res ?? false;
+  }
+
+  Future<void> _showErrorLog() async {
+    final log = await CrashReporter.readLog();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(ctx).height * 0.55,
+          child: Column(
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 8, 20, 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.bug_report_outlined, size: 18, color: Colors.white70),
+                    SizedBox(width: 8),
+                    Text('Error log',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    Spacer(),
+                    Icon(Icons.copy_rounded, size: 16, color: Colors.white38),
+                    SizedBox(width: 4),
+                    Text('tap text to copy',
+                        style: TextStyle(fontSize: 10, color: kTextDim)),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      log,
+                      style: const TextStyle(
+                          fontSize: 11, height: 1.35, fontFamily: 'monospace'),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => CrashReporter.clear(),
+                        child: const Text('Clear log'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: Colors.white),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: log));
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Copy',
+                            style: TextStyle(color: Colors.black)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../core/theme.dart';
 import '../models/clip.dart';
 import '../services/analytics.dart';
+import '../services/crash_reporter.dart';
 import '../services/procam_engine.dart';
 import '../services/video_exporter.dart';
 import '../widgets/grid_overlay.dart';
@@ -35,6 +36,7 @@ class _RecordScreenState extends State<RecordScreen> {
   bool _busy = false;
   bool _torch = false;
   bool _is4k = false;
+  bool _hqMode = false;
   bool _grid = true;
   bool _prompterOn = true;
   bool _focusLocked = false;
@@ -92,6 +94,7 @@ class _RecordScreenState extends State<RecordScreen> {
     final mics = await _engine.audioInputs();
     final clips = await ClipRepository.list();
     final k4 = await _engine.is4k();
+    final hq = await _engine.isHq();
     if (!mounted) return;
     setState(() {
       _dirs = dirs;
@@ -100,6 +103,7 @@ class _RecordScreenState extends State<RecordScreen> {
       _micId = mics.isNotEmpty ? mics.first.id : null;
       _lastClip = clips.isNotEmpty ? clips.first : null;
       _is4k = k4;
+      _hqMode = hq;
       _prompterOn = true;
     });
   }
@@ -127,6 +131,7 @@ class _RecordScreenState extends State<RecordScreen> {
         }
         break;
       case 'error':
+        CrashReporter.log('Camera error: ${e['message']}');
         _snack(e['message']?.toString() ?? 'Camera error');
         break;
     }
@@ -210,6 +215,7 @@ class _RecordScreenState extends State<RecordScreen> {
         });
       }
     } catch (e) {
+      CrashReporter.log('Record toggle error: $e', StackTrace.current);
       _snack(e.toString());
       if (mounted) setState(() => _busy = false);
     }
@@ -259,6 +265,27 @@ class _RecordScreenState extends State<RecordScreen> {
       'requested_4k': next ? 1 : 0,
     });
     if (next && !real) _snack('4K unavailable on this camera — using 1080p');
+  }
+
+  Future<void> _toggleHqMode() async {
+    final next = !_hqMode;
+    if (_recording) {
+      _snack('Stop recording to change quality profile');
+      return;
+    }
+    final ok = await _engine.setHqMode(next);
+    if (!mounted) return;
+    if (!ok) {
+      _snack('Could not change quality profile');
+      return;
+    }
+    setState(() => _hqMode = next);
+    Analytics.instance.log('quality_change', {
+      'quality': next ? 'max' : 'reliable',
+    });
+    _snack(next
+        ? 'MAX Quality on: 60 FPS + HDR + stabilization'
+        : 'Reliable mode: camera will run on any phone');
   }
 
   Future<void> _toggleTorch() async {
@@ -575,6 +602,12 @@ class _RecordScreenState extends State<RecordScreen> {
               onTap: _toggleTorch,
             ),
             _topBtn(Icons.exposure_rounded, onTap: _openExposure),
+            _topBtn(
+              null,
+              text: 'MAX',
+              active: _hqMode,
+              onTap: _toggleHqMode,
+            ),
             _topBtn(
               null,
               text: _is4k ? '4K' : 'HD',
@@ -913,6 +946,7 @@ class _ExportSheetState extends State<_ExportSheet> {
         _sizeMb = mb;
       });
     } catch (e) {
+      CrashReporter.log('Export failed: $e', StackTrace.current);
       Analytics.instance.log('export_failed', {'fps': _fps, 'error': '$e'});
       // Never leave a half-written MP4 that the gallery would try to open.
       try {

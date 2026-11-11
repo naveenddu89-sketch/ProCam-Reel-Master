@@ -93,6 +93,9 @@ class MainActivity : FlutterActivity() {
                 result.success(engine.setQuality4k(call.arguments as? Boolean ?: false))
 
             "is4k" -> result.success(engine.is4k())
+            "isHq" -> result.success(engine.isHq())
+            "setHqMode" ->
+                result.success(engine.setHqMode(call.arguments as? Boolean ?: false))
             "switchCamera" -> result.success(engine.switchCamera())
             "startRecording" -> {
                 // Mic + encoder setup runs off the UI thread; the reply lands
