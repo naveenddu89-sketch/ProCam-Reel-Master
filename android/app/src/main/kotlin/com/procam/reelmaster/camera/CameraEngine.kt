@@ -299,20 +299,22 @@ class CameraEngine(
                 fallback = FallbackStrategy.higherQualityOrLowerThan(Quality.HD)
             }
 
-            val recorderBuilder = Recorder.Builder()
+            val recorder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(quality, fallback))
                 .setAspectRatio(cxAspect)
                 // 60 Mbps master. CameraX caps this at the hardware encoder's
                 // real limit, so the recorded clip keeps maximum detail.
                 .setTargetVideoEncodingBitRate(MASTER_BITRATE)
                 .setExecutor(cameraExecutor)
+                .build()
+
+            val captureBuilder = VideoCapture.Builder(recorder)
             if (hq) {
+                // CameraX's own frame-rate API (1.3+): fixed 60 fps where the
+                // sensor supports it, otherwise the best fixed range.
+                captureBuilder.setTargetFrameRate(fpsRange)
                 try {
-                    val extender = Camera2Interop.Extender(recorderBuilder)
-                    extender.setCaptureRequestOption(
-                        CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                        fpsRange,
-                    )
+                    val extender = Camera2Interop.Extender(captureBuilder)
                     extender.setCaptureRequestOption(
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON,
@@ -328,12 +330,11 @@ class CameraEngine(
                         )
                     }
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Recorder HQ tuning skipped: ${t.message}")
+                    Log.w(TAG, "Video HQ tuning skipped: ${t.message}")
                 }
             }
-            val recorder = recorderBuilder.build()
+            val capture = captureBuilder.build()
 
-            val capture = VideoCapture.withOutput(recorder)
             val selector = CameraSelector.Builder()
                 .requireLensFacing(lensFacing)
                 .build()
